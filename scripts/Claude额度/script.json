@@ -1,0 +1,40 @@
+{
+  "iconImage": null,
+  "localizedDescriptions": {
+    "fr": "",
+    "en": "",
+    "ru": "",
+    "zh": "",
+    "ja": "",
+    "de": "",
+    "it": "",
+    "es": "",
+    "pt": ""
+  },
+  "intentInputTypes": [],
+  "contributors": [],
+  "description": null,
+  "remoteResource": {
+    "hash": "8b946241a5126fef77f2c017f338842e",
+    "url": "https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/releases/claude-quota.zip",
+    "autoUpdateInterval": 600
+  },
+  "localizedNames": {
+    "it": "",
+    "ru": "",
+    "de": "",
+    "es": "",
+    "en": "",
+    "ja": "",
+    "fr": "",
+    "zh": "",
+    "pt": ""
+  },
+  "color": "rgba(217, 119, 87,1)",
+  "runInApp": false,
+  "author": null,
+  "name": "Claude额度",
+  "entry": "index.tsx",
+  "icon": "sparkles",
+  "version": "1.0.0"
+}
