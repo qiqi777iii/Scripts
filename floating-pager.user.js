@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://scripting.app/userscripts
-// @version      1.0.28
+// @version      1.0.29
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
-// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.28 去屎山：继续删除无引用健康检查，保留事件驱动分页扫描。
+// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.29 修复 rule34video 部分模型页底部分页按钮无法翻页。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -304,8 +304,14 @@
     return /(^|\.)rule34video\.com$/i.test(location.hostname);
   }
 
+  function isRule34PaginationContainer(el) {
+    if (!el || !isRule34Video()) return false;
+    return Boolean(el.closest?.('nav, .pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"], [class*="page-list"], [class*="pagebar"]'));
+  }
+
   function hasRule34PaginationDom() {
-    return Boolean($('.pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"]'));
+    if ($('.pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"], [class*="page-list"], [class*="pagebar"]')) return true;
+    return $$('a[href], button, [role="button"], [onclick]').some((el) => isRule34PaginationContainer(el) && numericText(el));
   }
 
   function getRule34PathPage() {
@@ -329,7 +335,7 @@
     const link = el && (el.tagName === "A" ? el : el.closest?.("a[href]"));
     if (!link || !isRule34Video()) return false;
     if (link.getAttribute("data-action") !== "ajax") return false;
-    return Boolean(link.closest('.pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"]'));
+    return isRule34PaginationContainer(link);
   }
 
   function clickRule34AjaxPagination(link) {
@@ -799,7 +805,9 @@
 
     // 很多站点分类页第一页没有页码，下一页链接是 /category/name/2/ 或 /page/2/。
     // 只在分页区域内解析 URL 末尾数字，避免把视频 ID 误判成页码。
-    const inPager = el.closest?.('nav, .pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"], [class*="page-numbers"]');
+    const inPager = isRule34Video()
+      ? isRule34PaginationContainer(el)
+      : el.closest?.('nav, .pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"], [class*="page-numbers"]');
     if (href && inPager) {
       try {
         const url = new URL(href, location.href);
@@ -855,7 +863,8 @@
       let score = 0;
       if (arrowRe.test(text)) score += 80;
       if (wordRe.test(text)) score += 80;
-      if (el.closest('nav, .pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"]')) score += 40;
+      if (isRule34PaginationContainer(el)) score += 40;
+      else if (el.closest('nav, .pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"]')) score += 40;
       const rect = el.getBoundingClientRect();
       if (rect.top > innerHeight * 0.45) score += 10;
       if (score > bestScore) {
