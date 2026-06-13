@@ -1,7 +1,6 @@
 {
   "entry": "index.tsx",
   "remoteResource": {
-    "hash": "b83dfe9c6c895b6341d00b4e8e4bd07a",
     "url": "https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/releases/codex-quota.zip",
     "autoUpdateInterval": 600
   },
