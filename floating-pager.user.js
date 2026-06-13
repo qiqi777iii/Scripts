@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://scripting.app/userscripts
-// @version      1.0.31
+// @version      1.0.32
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
-// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.31 修复 rule34video 模型页 from: AJAX 翻页页码识别。
+// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.32 用专用 AJAX 解析器彻底修复 rule34video 同类分页。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -310,6 +310,42 @@
     const match = raw.match(/(?:^|;)(?:from(?:_[^:;]*)?):0*(\d{1,5})(?:;|$)/i);
     if (!match) return "";
     return String(parseInt(match[1], 10));
+  }
+
+  function getRule34AjaxPaginationLinks() {
+    if (!isRule34Video()) return [];
+    return $$('a[data-action="ajax"][data-parameters]').filter((el) => rule34PageFromDataParameters(el));
+  }
+
+  function getRule34VisiblePaginationPage() {
+    let best = "";
+    let bestBottom = -Infinity;
+    for (const el of getRule34AjaxPaginationLinks()) {
+      if (!visible(el)) continue;
+      const text = (el.textContent || el.innerText || "").trim();
+      if (!/^0*\d{1,5}$/.test(text)) continue;
+      const page = rule34PageFromDataParameters(el) || numericText(el);
+      if (!page) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.top >= bestBottom) {
+        best = page;
+        bestBottom = rect.top;
+      }
+    }
+    return best;
+  }
+
+  function findRule34AjaxPageLink(targetPage) {
+    targetPage = parseInt(targetPage, 10);
+    if (!Number.isFinite(targetPage) || targetPage < 1) return null;
+    let fallback = null;
+    for (const el of getRule34AjaxPaginationLinks()) {
+      const page = parseInt(rule34PageFromDataParameters(el) || "", 10);
+      if (page !== targetPage) continue;
+      if (visible(el)) return el;
+      fallback = fallback || el;
+    }
+    return fallback;
   }
 
   function isRule34PaginationContainer(el) {
@@ -631,6 +667,9 @@
     const fromUrl = pageFromUrl();
     if (fromUrl) return fromUrl;
 
+    const ajaxPage = getRule34VisiblePaginationPage();
+    if (ajaxPage) return ajaxPage;
+
     // AJAX 翻页后地址栏可能不变，优先读取底部分页当前按钮（红色数字）。
     const activeSelectors = [
       ".pagination .active",
@@ -732,6 +771,11 @@
     if (isMissAvPaginationPage()) return makeMissAvPageUrl(targetPage);
     if (isXVideos()) return makeXVideosPageUrl(targetPage);
 
+    if (isRule34Video()) {
+      const ajaxLink = findRule34AjaxPageLink(targetPage);
+      if (ajaxLink) return { __paginationElement: ajaxLink };
+    }
+
     const direct = makePageUrl(targetPage);
     if (direct) return direct;
 
@@ -785,8 +829,9 @@
         focusInput();
         return;
       }
-      const url = makeJumpPageUrl(target);
-      if (url) hardNavigate(url);
+      const pageAction = makeJumpPageUrl(target);
+      if (typeof pageAction === "string" && pageAction) hardNavigate(pageAction);
+      else if (pageAction?.__paginationElement) clickOrNavigate(pageAction.__paginationElement);
       else close();
     };
 
@@ -851,6 +896,9 @@
     const target = Number.isFinite(current) ? current + (direction === "next" ? 1 : -1) : NaN;
 
     if (target >= 1) {
+      const ajaxLink = findRule34AjaxPageLink(target);
+      if (ajaxLink) return ajaxLink;
+
       for (const el of $$('a[href], button, [role="button"], [onclick]')) {
         if (!visible(el) || disabled(el)) continue;
         const n = parseInt(elementPageNumber(el) || "", 10);
@@ -876,7 +924,12 @@
       let score = 0;
       if (arrowRe.test(text)) score += 80;
       if (wordRe.test(text)) score += 80;
-      if (rule34PageFromDataParameters(el)) score += 80;
+      if (rule34PageFromDataParameters(el)) {
+        const page = parseInt(rule34PageFromDataParameters(el) || "", 10);
+        const targetPage = Number.isFinite(target) ? target : NaN;
+        if (Number.isFinite(targetPage) && page !== targetPage) score -= 100;
+        else score += 80;
+      }
       if (isRule34PaginationContainer(el)) score += 40;
       else if (el.closest('nav, .pagination, .pager, [class*="pagination"], [class*="pager"], [class*="pages"]')) score += 40;
       const rect = el.getBoundingClientRect();
@@ -1008,6 +1061,10 @@
 
   function clickOrNavigate(el) {
     if (!el || STATE.navigating) return;
+    if (el.__paginationElement) {
+      clickOrNavigate(el.__paginationElement);
+      return;
+    }
     if (el.__paginationUrl) {
       hardNavigate(el.__paginationUrl);
       return;
