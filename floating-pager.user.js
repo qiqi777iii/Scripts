@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://scripting.app/userscripts
-// @version      1.0.30
+// @version      1.0.31
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
-// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.30 修复 rule34video 搜索页 AJAX 翻页页码识别。
+// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.31 修复 rule34video 模型页 from: AJAX 翻页页码识别。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -307,7 +307,7 @@
   function rule34PageFromDataParameters(el) {
     if (!el || !isRule34Video()) return "";
     const raw = el.getAttribute?.("data-parameters") || "";
-    const match = raw.match(/(?:^|;)from_[^:;]*:0*(\d{1,5})(?:;|$)/i);
+    const match = raw.match(/(?:^|;)(?:from(?:_[^:;]*)?):0*(\d{1,5})(?:;|$)/i);
     if (!match) return "";
     return String(parseInt(match[1], 10));
   }
