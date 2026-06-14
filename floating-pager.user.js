@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://scripting.app/userscripts
-// @version      1.0.36
+// @version      1.0.37
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
 // @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.36 修复悬浮菜单点击无反应。
@@ -1656,11 +1656,6 @@
     }
 
     if (typeof GM !== "undefined" && GM.registerMenuCommand) {
-      GM.registerMenuCommand("显示/隐藏通用翻页悬浮菜单", async () => {
-        STATE.enabled = !STATE.enabled;
-        await gmSet(ENABLE_KEY, STATE.enabled);
-        scheduleUpdate(0);
-      });
       GM.registerMenuCommand("📍 重置悬浮菜单位置", async () => {
         STATE.savedPosition = null;
         await gmSet(POS_KEY, null);
