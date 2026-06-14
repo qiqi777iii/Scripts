@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://scripting.app/userscripts
-// @version      1.0.33
+// @version      1.0.36
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
-// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.33 修复 iOS Safari 滚动后浮动按钮漂移。
+// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.36 修复悬浮菜单点击无反应。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -23,6 +23,7 @@
   const SAFE_BOTTOM_GAP = 0;
   const PAGER_ITEM_SIZE = 35;
   const PAGE_MIN_WIDTH = 48;
+  const FALLBACK_PAGER_WIDTH = PAGER_ITEM_SIZE * 3 + PAGE_MIN_WIDTH;
   const REFRESH_ICON_SIZE = 18;
   const DEFAULT_RIGHT_GAP = 16;
   const NODESEEK_BOTTOM_EXTRA = 0;
@@ -179,6 +180,11 @@
       return findOHentaiCandidate(direction);
     }
 
+    if (isNodeSeek()) {
+      const siteCandidate = findNodeSeekCandidate(direction);
+      if (siteCandidate) return siteCandidate;
+    }
+
     if (isDiscuz()) {
       const siteCandidate = findDiscuzCandidate(direction);
       if (siteCandidate) return siteCandidate;
@@ -226,6 +232,14 @@
       const value = url.searchParams.get(key);
       if (/^\d+$/.test(value || "")) return String(parseInt(value, 10));
     }
+    // NodeSeek 列表页：/page-2，最后一个数字就是页码。
+    if (/(^|\.)nodeseek\.com$/i.test(url.hostname)) {
+      const nodeSeekListMatch = url.pathname.match(/^\/page-0*(\d{1,5})(?:\/)?$/i);
+      if (nodeSeekListMatch) return String(parseInt(nodeSeekListMatch[1], 10));
+      const nodeSeekCategoryMatch = url.pathname.match(/^\/categories\/[^/]+\/page-0*(\d{1,5})(?:\/)?$/i);
+      if (nodeSeekCategoryMatch) return String(parseInt(nodeSeekCategoryMatch[1], 10));
+    }
+
     // NodeSeek 帖子分页格式：/post-174345-3，最后一个数字才是页码，
     // 中间的 174345 是帖子 ID，不能误当成页码。
     if (/(^|\.)nodeseek\.com$/i.test(url.hostname)) {
@@ -771,6 +785,8 @@
     if (isMissAvPaginationPage()) return makeMissAvPageUrl(targetPage);
     if (isXVideos()) return makeXVideosPageUrl(targetPage);
 
+    if (isNodeSeek()) return makeNodeSeekPageUrl(targetPage);
+
     if (isRule34Video()) {
       const ajaxLink = findRule34AjaxPageLink(targetPage);
       if (ajaxLink) return { __paginationElement: ajaxLink };
@@ -967,6 +983,11 @@
       if (sitePage) return sitePage;
     }
 
+    if (isNodeSeek()) {
+      const sitePage = getNodeSeekCurrentPage();
+      if (sitePage) return sitePage;
+    }
+
     const fromUrl = pageFromUrl();
     if (fromUrl) return fromUrl;
 
@@ -1107,6 +1128,60 @@
     return /(^|\.)nodeseek\.com$/i.test(location.hostname);
   }
 
+  function getNodeSeekCurrentPage() {
+    if (!isNodeSeek()) return "";
+    const fromUrl = pageFromUrl();
+    if (fromUrl) return fromUrl;
+    for (const el of $$('a[href^="/page-"], a[href*="/page-"]')) {
+      const text = (el.textContent || el.innerText || "").trim();
+      if (/^1$/.test(text) && visible(el)) return "1";
+    }
+    return "1";
+  }
+
+  function makeNodeSeekPageUrl(targetPage) {
+    targetPage = parseInt(targetPage, 10);
+    if (!isNodeSeek() || !Number.isFinite(targetPage) || targetPage < 1) return "";
+    const url = new URL(location.href);
+    if (/^\/page-\d+\/?$/i.test(url.pathname)) {
+      url.pathname = `/page-${targetPage}`;
+      url.search = "";
+      url.hash = "";
+      return url.href;
+    }
+    if (/^\/categories\/[^/]+(?:\/page-\d+)?\/?$/i.test(url.pathname)) {
+      const base = url.pathname.replace(/\/page-\d+\/?$/i, "").replace(/\/+$/g, "");
+      url.pathname = targetPage <= 1 ? base : `${base}/page-${targetPage}`;
+      url.hash = "";
+      return url.href;
+    }
+    return "";
+  }
+
+  function findNodeSeekPageLink(targetPage) {
+    targetPage = parseInt(targetPage, 10);
+    if (!isNodeSeek() || !Number.isFinite(targetPage) || targetPage < 1) return null;
+    for (const el of $$('a[href]')) {
+      if (!visible(el) || disabled(el)) continue;
+      const page = parseInt(elementPageNumber(el) || "", 10);
+      if (page === targetPage) return el;
+    }
+    return null;
+  }
+
+  function findNodeSeekCandidate(direction) {
+    if (!isNodeSeek()) return null;
+    const current = parseInt(getNodeSeekCurrentPage() || "1", 10);
+    const target = current + (direction === "next" ? 1 : -1);
+    if (!Number.isFinite(target) || target < 1) return null;
+
+    const link = findNodeSeekPageLink(target);
+    if (link) return link;
+
+    const url = makeNodeSeekPageUrl(target);
+    return url ? { __paginationUrl: url } : null;
+  }
+
   function shouldForceRightBottomPosition() {
     // 司姬社签到页是桌面版页面被手机缩放显示，普通 fixed/right 定位会跑到页面中间。
     // 其他网页只保持“初始默认位置”和新标签页打开按钮一致；如果用户拖动保存位置，仍使用自己的保存位置，
@@ -1130,11 +1205,11 @@
 
   function applyDefaultMenuPosition(box) {
     if (!box) return;
-    const vv = getVisualViewportRect();
+    const viewport = getViewportBox();
     const width = box.offsetWidth || (box.dataset.pagination === "false" ? PAGER_ITEM_SIZE : FALLBACK_PAGER_WIDTH);
     const height = box.offsetHeight || PAGER_ITEM_SIZE;
-    const left = vv.left + vv.width - width - DEFAULT_RIGHT_GAP;
-    const top = vv.top + vv.height - height - getDefaultBottomGap();
+    const left = viewport.width - width - DEFAULT_RIGHT_GAP;
+    const top = viewport.height - height - getDefaultBottomGap();
     box.style.left = `${Math.max(0, Math.floor(left))}px`;
     box.style.top = `${Math.max(0, Math.floor(top))}px`;
     box.style.right = "auto";
