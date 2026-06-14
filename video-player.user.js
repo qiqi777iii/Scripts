@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         播放当前页视频
 // @namespace    qiqi777iii.videoplayer
-// @version      1.0.41
+// @version      1.0.42
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/video-player.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/video-player.user.js
-// @description  柔和小玻璃底悬浮图标：只在页面检测到视频/播放器时显示；智能播放/暂停当前页视频。支持进退 5 秒、全屏、拖动记位和常见网页播放器。v1.0.41 修复 iOS Safari 滚动后浮动按钮漂移。
+// @description  柔和小玻璃底悬浮图标：只在页面检测到视频/播放器时显示；智能播放/暂停当前页视频。支持进退 5 秒、全屏、拖动记位和常见网页播放器。v1.0.42 默认右边缘对齐悬浮翻页。
 // @match        *://*/*
 // @run-at       document-start
 // @grant        GM.getValue
@@ -22,11 +22,11 @@
   const STACK_GAP = 12;
   const INNER_GAP = 8;
   const TOOLBAR_W = BTN_SIZE * 7 + INNER_GAP * 6;
-  const RIGHT_GAP = 16;
+  const PAGER_RIGHT_GAP = 16;
   const PAGER_HEIGHT = 35;
-  const DEFAULT_RIGHT = RIGHT_GAP;
+  const DEFAULT_RIGHT = PAGER_RIGHT_GAP;
   const DEFAULT_BOTTOM = BOTTOM_GAP + PAGER_HEIGHT + STACK_GAP;
-  const CURRENT_LAYOUT_VERSION = '1.0.41';
+  const CURRENT_LAYOUT_VERSION = '1.0.42';
   const MIN_MAIN_VIDEO_W = 180;
   const MIN_MAIN_VIDEO_H = 120;
   const MIN_MAIN_VIDEO_AREA_RATIO = 0.12;
