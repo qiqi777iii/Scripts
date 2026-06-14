@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://scripting.app/userscripts
-// @version      1.0.37
+// @version      1.0.38
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
-// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.36 修复悬浮菜单点击无反应。
+// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.38 修复仅有刷新按钮时图标不居中。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -1287,12 +1287,13 @@
         width: ${PAGER_ITEM_SIZE}px;
         height: ${PAGER_ITEM_SIZE}px;
         border-radius: 50%;
+        justify-content: center;
       }
       #${SCRIPT_ID}[data-pagination="false"] .pager-item { display: none; }
       #${SCRIPT_ID}[data-pagination="false"] .refresh {
-        width: ${PAGER_ITEM_SIZE}px;
-        min-width: ${PAGER_ITEM_SIZE}px;
-        height: ${PAGER_ITEM_SIZE}px;
+        width: 100%;
+        min-width: 0;
+        height: 100%;
         padding: 0;
       }
       #${SCRIPT_ID} button, #${SCRIPT_ID} .page {
