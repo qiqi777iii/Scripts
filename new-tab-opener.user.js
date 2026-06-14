@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         新标签页打开
-// @version      1.0.31
+// @version      1.0.32
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/new-tab-opener.user.js
-// @description  🔗 单按钮浮动工具，柔和小玻璃底 + SVG 链接图标：开启=绿色，关闭=红色描边，一键切换新标签页开关。v1.0.31 将按钮贴近悬浮翻页左侧。
+// @description  🔗 单按钮浮动工具，柔和小玻璃底 + SVG 链接图标：开启=绿色，关闭=红色描边，一键切换新标签页开关。v1.0.32 修复 iOS Safari 滚动后浮动按钮漂移。
 // @match        *://*/*
 // @grant        GM.registerMenuCommand
 // @run-at       document-start
@@ -23,7 +23,7 @@
     const DEFAULT_BOTTOM = BOTTOM_GAP + (PAGER_HEIGHT - BTN_SIZE) / 2;
     const FALLBACK_PAGER_WIDTH = 148;
     const DEFAULT_RIGHT = PAGER_RIGHT_GAP + FALLBACK_PAGER_WIDTH + LINK_PAGER_GAP;
-    const CURRENT_LAYOUT_VERSION = '1.0.31';
+    const CURRENT_LAYOUT_VERSION = '1.0.32';
 
     const COLOR_ON = '#34C759';
     const COLOR_OFF = '#FF453A';
@@ -456,6 +456,16 @@
         return true;
     }
 
+    function getVisualViewportRect() {
+        const vv = window.visualViewport;
+        return {
+            left: Math.floor(vv?.offsetLeft || 0),
+            top: Math.floor(vv?.offsetTop || 0),
+            width: Math.floor(vv?.width || document.documentElement.clientWidth || innerWidth || 1),
+            height: Math.floor(vv?.height || document.documentElement.clientHeight || innerHeight || 1),
+        };
+    }
+
     // 悬浮翻页胶囊 id（由「悬浮翻页」脚本创建）。
     const PAGER_ID = 'universal-pagination-floating-menu';
 
@@ -464,22 +474,23 @@
     // 若悬浮翻页尚未创建，则使用保守 right/bottom 兜底，避免压到胶囊。
     function applyDefaultPosition() {
         if (!toolbar) return;
+        const vv = getVisualViewportRect();
         const pager = document.getElementById(PAGER_ID);
         if (pager) {
             const rect = pager.getBoundingClientRect();
             if (rect.width > 0 && rect.height > 0) {
                 const pos = clampPos(rect.left - LINK_PAGER_GAP - BTN_SIZE, 0);
                 toolbar.style.left = pos.left + 'px';
-                toolbar.style.top = 'auto';
+                toolbar.style.top = Math.max(0, Math.floor(vv.top + vv.height - BTN_SIZE - DEFAULT_BOTTOM)) + 'px';
                 toolbar.style.right = 'auto';
-                toolbar.style.bottom = DEFAULT_BOTTOM + 'px';
+                toolbar.style.bottom = 'auto';
                 return;
             }
         }
-        toolbar.style.left = 'auto';
-        toolbar.style.top = 'auto';
-        toolbar.style.right = DEFAULT_RIGHT + 'px';
-        toolbar.style.bottom = DEFAULT_BOTTOM + 'px';
+        toolbar.style.left = Math.max(0, Math.floor(vv.left + vv.width - BTN_SIZE - DEFAULT_RIGHT)) + 'px';
+        toolbar.style.top = Math.max(0, Math.floor(vv.top + vv.height - BTN_SIZE - DEFAULT_BOTTOM)) + 'px';
+        toolbar.style.right = 'auto';
+        toolbar.style.bottom = 'auto';
     }
 
     function syncDefaultPosition() {

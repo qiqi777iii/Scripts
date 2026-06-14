@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://scripting.app/userscripts
-// @version      1.0.32
+// @version      1.0.33
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/floating-pager.user.js
-// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.32 用专用 AJAX 解析器彻底修复 rule34video 同类分页。
+// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.33 修复 iOS Safari 滚动后浮动按钮漂移。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -1114,16 +1114,31 @@
     return isXsijisheSignPage();
   }
 
+  function getVisualViewportRect() {
+    const vv = window.visualViewport;
+    return {
+      left: Math.floor(vv?.offsetLeft || 0),
+      top: Math.floor(vv?.offsetTop || 0),
+      width: Math.floor(vv?.width || document.documentElement.clientWidth || innerWidth || 1),
+      height: Math.floor(vv?.height || document.documentElement.clientHeight || innerHeight || 1),
+    };
+  }
+
   function getDefaultBottomGap() {
     return SAFE_BOTTOM_GAP + (isNodeSeek() ? NODESEEK_BOTTOM_EXTRA : 0);
   }
 
   function applyDefaultMenuPosition(box) {
     if (!box) return;
-    box.style.left = "auto";
-    box.style.top = "auto";
-    box.style.right = `${DEFAULT_RIGHT_GAP}px`;
-    box.style.bottom = `${getDefaultBottomGap()}px`;
+    const vv = getVisualViewportRect();
+    const width = box.offsetWidth || (box.dataset.pagination === "false" ? PAGER_ITEM_SIZE : FALLBACK_PAGER_WIDTH);
+    const height = box.offsetHeight || PAGER_ITEM_SIZE;
+    const left = vv.left + vv.width - width - DEFAULT_RIGHT_GAP;
+    const top = vv.top + vv.height - height - getDefaultBottomGap();
+    box.style.left = `${Math.max(0, Math.floor(left))}px`;
+    box.style.top = `${Math.max(0, Math.floor(top))}px`;
+    box.style.right = "auto";
+    box.style.bottom = "auto";
   }
 
   function applySavedMenuPosition(box) {
@@ -1598,9 +1613,7 @@
     const stabilizeMenuPosition = () => {
       const box = $(`#${SCRIPT_ID}`);
       if (!box || STATE.dragging) return;
-      // 默认 fixed bottom 模式（无保存位置、非强制右下）不在页面滑动时重算，
-      // 避免 iOS 缩放页面过度滑动时 visualViewport resize 连珠触发引起拖影/抖动。
-      const needReapply = shouldForceRightBottomPosition() || (box.dataset.pagination === "false") || STATE.savedPosition;
+      const needReapply = true;
       if (!needReapply) return;
       // 防抖：合并连珠 resize，只在稳定后重算一次。
       if (stabilizeTimer) clearTimeout(stabilizeTimer);
@@ -1617,7 +1630,9 @@
     };
 
     window.addEventListener("resize", stabilizeMenuPosition);
+    window.addEventListener("scroll", stabilizeMenuPosition, { passive: true });
     window.visualViewport?.addEventListener("resize", stabilizeMenuPosition);
+    window.visualViewport?.addEventListener("scroll", stabilizeMenuPosition);
 
     const watchdog = () => {
       // 有些站点翻页是 PJAX/局部刷新，会替换 body 或拦截跳转；这时旧悬浮 DOM 可能被删，

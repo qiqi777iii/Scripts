@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         播放当前页视频
 // @namespace    qiqi777iii.videoplayer
-// @version      1.0.39
+// @version      1.0.41
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/video-player.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/video-player.user.js
-// @description  柔和小玻璃底悬浮图标：只在页面检测到视频/播放器时显示；智能播放/暂停当前页视频。支持进退 5 秒、全屏、拖动记位和常见网页播放器。v1.0.39 添加无视频自动隐藏逻辑。
+// @description  柔和小玻璃底悬浮图标：只在页面检测到视频/播放器时显示；智能播放/暂停当前页视频。支持进退 5 秒、全屏、拖动记位和常见网页播放器。v1.0.41 修复 iOS Safari 滚动后浮动按钮漂移。
 // @match        *://*/*
 // @run-at       document-start
 // @grant        GM.getValue
@@ -26,7 +26,7 @@
   const PAGER_HEIGHT = 35;
   const DEFAULT_RIGHT = RIGHT_GAP;
   const DEFAULT_BOTTOM = BOTTOM_GAP + PAGER_HEIGHT + STACK_GAP;
-  const CURRENT_LAYOUT_VERSION = '1.0.34';
+  const CURRENT_LAYOUT_VERSION = '1.0.41';
   const MIN_MAIN_VIDEO_W = 180;
   const MIN_MAIN_VIDEO_H = 120;
   const MIN_MAIN_VIDEO_AREA_RATIO = 0.12;
@@ -122,7 +122,46 @@
 
   // 当前是否有视频正在播放：播放后即使滚动到视口外，也要保持按钮显示，方便随时暂停/切换。
   function isAnyPlaying() {
+    if (isRule34VideoPage()) return isRule34MainVideoPlaying();
     return collectVideos().some(isVideoPlaying);
+  }
+
+  function isRule34VideoPage() {
+    const host = location.hostname.replace(/^www\./, '').toLowerCase();
+    return /(^|\.)rule34video\.com$/.test(host) && /^\/video\/\d+\//i.test(location.pathname);
+  }
+
+  function getRule34PlayerRoot() {
+    if (!isRule34VideoPage()) return null;
+    return document.getElementById('kt_player') || document.querySelector('.player-holder');
+  }
+
+  function getRule34Videos() {
+    const root = getRule34PlayerRoot();
+    if (!root) return [];
+    try {
+      return Array.from(root.querySelectorAll('video')).sort((a, b) => visibleArea(b) - visibleArea(a));
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function isRule34MainVideo(v) {
+    if (!v) return false;
+    const src = v.currentSrc || v.src || '';
+    if (/rule34video\.com\/get_file\//i.test(src) || /\/get_file\/\d+\//i.test(src)) return true;
+    const duration = Number.isFinite(v.duration) ? v.duration : 0;
+    if (duration >= 45 && isLargeMediaElement(v)) return true;
+    return false;
+  }
+
+  function getRule34MainVideo() {
+    const videos = getRule34Videos();
+    return videos.find(isRule34MainVideo) || videos.find((v) => hasSource(v) && isLargeMediaElement(v)) || videos[0] || null;
+  }
+
+  function isRule34MainVideoPlaying() {
+    return getRule34Videos().some((v) => isRule34MainVideo(v) && isVideoPlaying(v));
   }
 
   // 静音守护（一次性、极短时窗）：不少播放器（如 kt_player）会在初始化/播放瞄那一下把 muted
@@ -333,6 +372,51 @@
     }
   }
 
+  function clickRule34PlayerCenter() {
+    const root = getRule34PlayerRoot();
+    if (!root) return false;
+    const candidates = [];
+    const mainVideo = getRule34MainVideo();
+    if (mainVideo) candidates.push(mainVideo);
+    const sels = [
+      '.fp-ui', '.fp-play', '.fp-player', '.fp-engine', '.fp-ratio', '.fp-controls',
+      '.kt-player', '.player-holder', '#kt_player', 'video'
+    ];
+    for (const sel of sels) {
+      try { root.querySelectorAll(sel).forEach((n) => candidates.push(n)); } catch (e) {}
+    }
+    candidates.push(root);
+    const seen = new Set();
+    for (const n of candidates.sort((a, b) => visibleArea(b) - visibleArea(a))) {
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      if (!isLargeMediaElement(n) && n !== root) continue;
+      if (dispatchRealClick(n)) return true;
+    }
+    return false;
+  }
+
+  async function playRule34Video(muted) {
+    if (!isRule34VideoPage()) return false;
+    let target = getRule34MainVideo();
+    if (target) {
+      if (muted) enforceMute(target, 1800); else enforceSound(target, 1800);
+      if (hasSource(target) && await playVideo(target, muted) && isRule34MainVideoPlaying()) return true;
+    }
+    clickRule34PlayerCenter();
+    const deadline = Date.now() + 5200;
+    while (Date.now() < deadline) {
+      target = getRule34MainVideo();
+      if (target) {
+        if (muted) enforceMute(target, 900); else enforceSound(target, 900);
+        if (hasSource(target) && await playVideo(target, muted) && isRule34MainVideoPlaying()) return true;
+        if (isRule34MainVideoPlaying()) return true;
+      }
+      await new Promise((r) => setTimeout(r, 260));
+    }
+    return isRule34MainVideoPlaying();
+  }
+
   function isPornhubVideoPage() {
     const host = location.hostname.replace(/^www\./, '').toLowerCase();
     return /(^|\.)pornhub\.com$/.test(host) && /\/view_video\.php$/i.test(location.pathname);
@@ -416,6 +500,11 @@
 
   // 兼容模式主入口
   async function playCurrentPageVideo(muted) {
+    if (isRule34VideoPage()) {
+      if (await playRule34Video(muted)) { toast(muted ? "🔇 已静音播放" : "🔊 已正常播放"); return; }
+      toast("已点播放键，若仍不动请再点一次播放器");
+      return;
+    }
     const videos = collectVideos();
     if (videos.length > 0) {
       // 按可见面积降序，可见的优先；都不可见则按原始面积
@@ -1124,12 +1213,24 @@
     setVal('layoutVersion', CURRENT_LAYOUT_VERSION);
   }
 
+  function getVisualViewportRect() {
+    const vv = window.visualViewport;
+    return {
+      left: Math.floor(vv?.offsetLeft || 0),
+      top: Math.floor(vv?.offsetTop || 0),
+      width: Math.floor(vv?.width || document.documentElement.clientWidth || innerWidth || 1),
+      height: Math.floor(vv?.height || document.documentElement.clientHeight || innerHeight || 1),
+    };
+  }
+
   function applyDefaultPosition() {
     if (!toolbar) return;
-    toolbar.style.left = 'auto';
-    toolbar.style.top = 'auto';
-    toolbar.style.right = DEFAULT_RIGHT + 'px';
-    toolbar.style.bottom = DEFAULT_BOTTOM + 'px';
+    const vv = getVisualViewportRect();
+    const width = currentToolbarWidth();
+    toolbar.style.left = Math.max(0, Math.floor(vv.left + vv.width - width - DEFAULT_RIGHT)) + 'px';
+    toolbar.style.top = Math.max(0, Math.floor(vv.top + vv.height - BTN_SIZE - DEFAULT_BOTTOM)) + 'px';
+    toolbar.style.right = 'auto';
+    toolbar.style.bottom = 'auto';
     toolbar.style.transform = toolbarVisible ? 'scale(1)' : 'scale(0.9)';
   }
 
@@ -1147,6 +1248,7 @@
   }
 
   function getSeekTargetVideo() {
+    if (isRule34VideoPage()) return getRule34MainVideo();
     const playing = collectVideos().filter(isVideoPlaying).sort((a, b) => visibleArea(b) - visibleArea(a));
     if (playing.length > 0) return playing[0];
     return findLargeCurrentVideo() || findCurrentVideo();
@@ -1436,11 +1538,14 @@
       if (!toolbar || dragging) return;
       requestAnimationFrame(function () {
         if (savedPosition) applySavedPosition();
+        else applyDefaultPosition();
       });
     };
     if (!listenersInstalled) {
       window.addEventListener('resize', stabilizePosition);
+      window.addEventListener('scroll', stabilizePosition, { passive: true });
       window.visualViewport?.addEventListener('resize', stabilizePosition);
+      window.visualViewport?.addEventListener('scroll', stabilizePosition);
     }
     listenersInstalled = true;
 
