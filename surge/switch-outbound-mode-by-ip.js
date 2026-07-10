@@ -81,12 +81,23 @@ function retryOrFail(attempt, reason) {
   setTimeout(() => checkIP(attempt + 1), CONFIG.retryDelayMs * attempt);
 }
 
+function postStatus(ip, country, targetMode, changed) {
+  const modeName = targetMode === "rule" ? "规则模式" : "直接连接";
+  const action = changed ? "已切换" : "无需切换";
+  $notification.post(
+    "Surge 当前出口信息",
+    `IP：${ip}`,
+    `国家：${country} · ${modeName}（${action}）`
+  );
+}
+
 function applyMode(targetMode, ip, country) {
   $httpAPI("GET", "/v1/outbound", null, (current) => {
     if (current && current.mode === targetMode) {
       console.log(
         `[IPInfo 出站模式] ${ip} (${country})，当前已经是 ${targetMode}`
       );
+      postStatus(ip, country, targetMode, false);
       finish();
       return;
     }
@@ -100,15 +111,10 @@ function applyMode(targetMode, ip, country) {
           return;
         }
 
-        const modeName = targetMode === "rule" ? "规则模式" : "直接连接";
         console.log(
           `[IPInfo 出站模式] ${ip} (${country}) -> ${targetMode}`
         );
-        $notification.post(
-          "Surge 出站模式已切换",
-          `${ip} · ${country}`,
-          modeName
-        );
+        postStatus(ip, country, targetMode, true);
         finish();
       });
     });
