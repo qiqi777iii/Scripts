@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Search-av-mobile
-// @namespace    https://github.com/qiqi777iii/QiQi-Safari-script
-// @version      0.24.5.6
+// @namespace    https://github.com/qiqi777iii/Scripts
+// @version      0.24.5.7
 // @description  标记网页上的所有番号, 在相关网站快速方便的进行搜索
 // @author       iqxin
 // @modifiedBy   QiQi
@@ -105,8 +105,8 @@
 // @grant       GM_openInTab
 // @run-at      document-idle
 
-// @downloadURL https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/refs/heads/main/userscripts/search-av-mobile.user.js
-// @updateURL https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/refs/heads/main/userscripts/search-av-mobile.user.js
+// @downloadURL https://raw.githubusercontent.com/qiqi777iii/Scripts/refs/heads/main/userscripts/search-av-mobile.user.js
+// @updateURL https://raw.githubusercontent.com/qiqi777iii/Scripts/refs/heads/main/userscripts/search-av-mobile.user.js
 // ==/UserScript==
 
 (function() {

@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         新标签页打开
-// @namespace    https://github.com/qiqi777iii/QiQi-Safari-script
-// @version      1.0.55
-// @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/userscripts/new-tab-opener.user.js
-// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/userscripts/new-tab-opener.user.js
+// @namespace    https://github.com/qiqi777iii/Scripts
+// @version      1.0.56
+// @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
+// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  🔗 单按钮浮动工具，柔和小玻璃底 + SVG 链接图标：开启=轻蓝状态底+蓝色图标，关闭=普通灰底+普通图标，一键切换后台新标签页开关。v1.0.40 通用链接改为优先走 Safari 原生 target=_blank 默认行为，让系统“在后台打开”设置生效；特殊二段式打开也改用隐藏链接点击兜底。
 // @match        *://*/*
 // @grant        GM.registerMenuCommand

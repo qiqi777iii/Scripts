@@ -6,13 +6,13 @@
   "contributors": [],
   "remoteResource": {
     "autoUpdateInterval": 600,
-    "url": "https://github.com/qiqi777iii/QiQi-Safari-script/tree/main/scripts/TabsSaver"
+    "url": "https://github.com/qiqi777iii/Scripts/tree/main/scripts/TabsSaver"
   },
   "color": "rgba(10, 132, 255, 1)",
   "name": "Tabs Saver",
   "icon": "bookmark.fill",
   "description": "Save web pages from the share sheet into groups and browse them later.",
-  "version": "1.2.9",
+  "version": "1.2.10",
   "localizedDescriptions": {
     "zh": "从分享表把网页收藏到分组，稍后在脚本里查看和打开。",
     "en": "Save web pages from the share sheet into groups and browse them later."

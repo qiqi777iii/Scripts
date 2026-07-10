@@ -1,7 +1,7 @@
 {
   "entry": "index.tsx",
   "remoteResource": {
-    "url": "https://github.com/qiqi777iii/QiQi-Safari-script/tree/main/scripts/Codex%E9%A2%9D%E5%BA%A6",
+    "url": "https://github.com/qiqi777iii/Scripts/tree/main/scripts/Codex%E9%A2%9D%E5%BA%A6",
     "autoUpdateInterval": 600
   },
   "contributors": [],
@@ -32,7 +32,7 @@
   "description": null,
   "iconImage": null,
   "intentInputTypes": [],
-  "version": "1.0.0",
+  "version": "1.0.1",
   "runInApp": false,
   "icon": "bolt.fill",
   "color": "rgba(0, 198, 165,1)"

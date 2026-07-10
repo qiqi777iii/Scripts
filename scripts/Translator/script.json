@@ -7,7 +7,7 @@
   "permissions" : null,
   "remoteResource" : {
     "autoUpdateInterval" : 600,
-    "url" : "https:\/\/github.com\/qiqi777iii\/QiQi-Safari-script\/tree\/main\/scripts\/Translator"
+    "url" : "https:\/\/github.com\/qiqi777iii\/Scripts\/tree\/main\/scripts\/Translator"
   },
   "runInApp" : false,
   "localizedNames" : {
@@ -25,7 +25,7 @@
     "Text",
     "URLs"
   ],
-  "version" : "2.9.5",
+  "version" : "2.9.6",
   "icon" : "translate",
   "name" : "Translator",
   "entry" : "index.tsx",

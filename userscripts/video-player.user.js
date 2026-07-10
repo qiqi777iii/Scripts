@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         播放当前页视频
-// @namespace    https://github.com/qiqi777iii/QiQi-Safari-script
-// @version      1.0.44
-// @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/userscripts/video-player.user.js
-// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/userscripts/video-player.user.js
+// @namespace    https://github.com/qiqi777iii/Scripts
+// @version      1.0.45
+// @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-player.user.js
+// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-player.user.js
 // @description  柔和小玻璃底悬浮图标：只在页面检测到视频/播放器时显示；智能播放/暂停当前页视频。支持进退 5 秒、全屏、拖动记位和常见网页播放器。v1.0.43 修复刷新后按钮宽度变化导致右边缘未重锚定。
 // @match        *://*/*
 // @run-at       document-start

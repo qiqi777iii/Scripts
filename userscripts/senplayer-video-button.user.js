@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name Senplayer播放
-// @namespace    https://github.com/qiqi777iii/QiQi-Safari-script
-// @version 0.1.23
-// @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/userscripts/senplayer-video-button.user.js
-// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/userscripts/senplayer-video-button.user.js
+// @namespace    https://github.com/qiqi777iii/Scripts
+// @version 0.1.24
+// @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/senplayer-video-button.user.js
+// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/senplayer-video-button.user.js
 // @description 通用捕获网页视频地址，在页面内显示悬浮按钮，一键复制并通过 SenPlayer x-callback-url/play 播放。
 // @match http://*/*
 // @match https://*/*
