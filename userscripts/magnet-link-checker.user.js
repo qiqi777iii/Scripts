@@ -3,8 +3,8 @@
 // @namespace    https://github.com/ZiPenOk
 // @modifiedFrom 磁力验车助手 Beta: https://sleazyfork.org/zh-CN/scripts/565230-%E7%A3%81%E5%8A%9B%E9%AA%8C%E8%BD%A6%E5%8A%A9%E6%89%8B-beta
 // @modifiedFrom 磁力/电驴链接助手: https://sleazyfork.org/zh-CN/scripts/577143-%E7%A3%81%E5%8A%9B-%E7%94%B5%E9%A9%B4%E9%93%BE%E6%8E%A5%E5%8A%A9%E6%89%8B
-// @version      3.5.0-custom.1
-// @description  保留紫色验车图标与复制按钮，支持磁力验车和复制。
+// @version      3.5.0-custom.2
+// @description  识别网页中的磁力链接，提供验车和复制功能。
 // @icon         https://uxwing.com/wp-content/themes/uxwing/download/seo-marketing/magnet-magnetic-icon.png
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 0.2.18
-// @description Add a floating Safari button for saving the current page to the Scripting Tabs Saver groups.
+// @version 0.2.19
+// @description 在当前网页显示悬浮收藏按钮，可将页面保存到 Scripting「标签页收藏」的指定分组。
 // @match http://*/*
 // @match https://*/*
 // @run-at document-end

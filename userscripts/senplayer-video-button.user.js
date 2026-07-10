@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name Senplayer播放
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version 0.1.24
+// @version 0.1.25
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/senplayer-video-button.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/senplayer-video-button.user.js
-// @description 通用捕获网页视频地址，在页面内显示悬浮按钮，一键复制并通过 SenPlayer x-callback-url/play 播放。
+// @description 捕获当前网页视频地址，可一键复制地址或通过 SenPlayer 播放。
 // @match http://*/*
 // @match https://*/*
 // @exclude https://missav.ai/*

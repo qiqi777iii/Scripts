@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Search-av-mobile
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      0.24.5.7
-// @description  标记网页上的所有番号, 在相关网站快速方便的进行搜索
+// @version      0.24.5.8
+// @description  识别并标记网页中的番号，提供常用网站快捷搜索。
 // @author       iqxin
 // @modifiedBy   QiQi
 // @modifiedFrom https://sleazyfork.org/zh-CN/scripts/423350

@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.59
+// @version      1.0.60
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
-// @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.44 统一为 30px 高对比深色玻璃圆按钮，与其他浏览器脚本一致。
+// @description  自动识别页面的上一页和下一页，并提供可拖动的悬浮翻页按钮。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
