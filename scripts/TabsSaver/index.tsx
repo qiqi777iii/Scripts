@@ -117,10 +117,18 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const GROUP_SEPARATOR_KEY = "tab.showGroupSeparators"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.2.7"
+const APP_VERSION = "1.2.8"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "1.2.8",
+    date: "2026-07-10",
+    items: [
+      "历史快照删除提示明确说明会从 WebDAV 永久删除。",
+      "修复多选历史版本后需要多次点击才显示删除确认的问题。",
+    ],
+  },
   {
     version: "1.2.7",
     date: "2026-07-09",
