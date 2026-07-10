@@ -117,10 +117,18 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const GROUP_SEPARATOR_KEY = "tab.showGroupSeparators"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.2.8"
+const APP_VERSION = "1.2.9"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "1.2.9",
+    date: "2026-07-10",
+    items: [
+      "Safari 收藏按钮改为立即创建，不再等待 DOMContentLoaded。",
+      "增强按钮和样式健康检查，网页替换 head 或关键节点后会轻量恢复。",
+    ],
+  },
   {
     version: "1.2.8",
     date: "2026-07-10",

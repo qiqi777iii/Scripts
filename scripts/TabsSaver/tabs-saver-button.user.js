@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 0.2.17
+// @version 0.2.18
 // @description Add a floating Safari button for saving the current page to the Scripting Tabs Saver groups.
 // @match http://*/*
 // @match https://*/*
@@ -579,7 +579,13 @@
     rootObserver = new MutationObserver(mutations => {
       for (const mutation of mutations) {
         const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes]
-        if (changedNodes.some(node => node === document.body || node?.id === WRAP_ID || node?.id === "qiqi-tab-save-style")) {
+        if (changedNodes.some(node =>
+          node === document.body ||
+          node?.tagName === "HEAD" ||
+          node?.id === WRAP_ID ||
+          node?.id === "qiqi-tab-save-style" ||
+          node?.querySelector?.(`#${WRAP_ID}, #qiqi-tab-save-style`)
+        )) {
           watchBody(document.body)
           scheduleHealthCheck()
           return
@@ -626,9 +632,9 @@
     scheduleHealthCheck()
   }
 
+  boot()
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot, { once: true })
-  } else {
-    boot()
+    // 按钮不依赖 body，立即创建；DOMContentLoaded 只作为额外健康检查点。
+    document.addEventListener("DOMContentLoaded", scheduleHealthCheck, { once: true })
   }
 })()

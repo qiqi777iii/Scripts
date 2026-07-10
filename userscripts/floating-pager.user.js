@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/QiQi-Safari-script
-// @version      1.0.57
+// @version      1.0.58
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/QiQi-Safari-script/main/userscripts/floating-pager.user.js
 // @description  自动识别页面上一页/下一页，显示可拖动悬浮翻页菜单，并稳定记住菜单位置；v1.0.44 统一为 30px 高对比深色玻璃圆按钮，与其他浏览器脚本一致。
@@ -41,8 +41,10 @@
     updateTimer: null,
     navigating: false,
     savedPosition: null,
+    positionRevision: 0,
     dragging: false,
     initialized: false,
+    settingsLoaded: false,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -1610,14 +1612,15 @@
     document.documentElement.appendChild(style);
   }
 
-  async function createMenu() {
+  function createMenu() {
     addStyles();
     let box = $(`#${SCRIPT_ID}`);
     if (box) return box;
 
     box = document.createElement("div");
     box.id = SCRIPT_ID;
-    box.dataset.hidden = "true";
+    box.dataset.hidden = "false";
+    box.dataset.pagination = "false";
     box.innerHTML = `
       <button class="refresh" type="button" title="刷新页面" aria-label="刷新页面">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -1631,32 +1634,37 @@
     `;
     isolateFloatingUi(box);
     document.documentElement.appendChild(box);
-
-    if (shouldForceRightBottomPosition()) {
-      STATE.savedPosition = null;
-      applyDefaultMenuPosition(box);
-      requestAnimationFrame(() => applyDefaultMenuPosition(box));
-    } else {
-      const pos = await gmGet(POS_KEY, null);
-      if (pos && Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
-        STATE.savedPosition = { left: pos.left, top: pos.top };
-        applySavedMenuPosition(box);
-        requestAnimationFrame(() => {
-          if (STATE.savedPosition) applySavedMenuPosition(box);
-        });
-      } else {
-        STATE.savedPosition = null;
-        applyDefaultMenuPosition(box);
-        requestAnimationFrame(() => {
-          if (STATE.savedPosition) applySavedMenuPosition(box);
-        });
-      }
-    }
+    applyDefaultMenuPosition(box);
 
     bindActionButton(box.querySelector(".prev"), () => clickOrNavigate(STATE.prev));
     bindActionButton(box.querySelector(".next"), () => clickOrNavigate(STATE.next));
     bindActionButton(box.querySelector(".refresh"), reloadPage);
     setupPageControl(box, box.querySelector(".page"));
+
+    if (shouldForceRightBottomPosition()) {
+      STATE.savedPosition = null;
+      requestAnimationFrame(() => {
+        if (box.isConnected && document.getElementById(SCRIPT_ID) === box && !STATE.dragging) applyDefaultMenuPosition(box);
+      });
+    } else {
+      const positionRevision = STATE.positionRevision;
+      gmGet(POS_KEY, null).then((pos) => {
+        if (!box.isConnected || document.getElementById(SCRIPT_ID) !== box || STATE.dragging || STATE.positionRevision !== positionRevision) return;
+        if (pos && Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
+          STATE.savedPosition = { left: pos.left, top: pos.top };
+          applySavedMenuPosition(box);
+          requestAnimationFrame(() => {
+            if (box.isConnected && document.getElementById(SCRIPT_ID) === box && !STATE.dragging && STATE.positionRevision === positionRevision && STATE.savedPosition) {
+              applySavedMenuPosition(box);
+            }
+          });
+        } else {
+          STATE.savedPosition = null;
+          applyDefaultMenuPosition(box);
+        }
+      }).catch(() => {});
+    }
+
     return box;
   }
 
@@ -1722,7 +1730,10 @@
       pointerId = null;
       STATE.dragging = false;
       box.classList.remove("dragging");
-      if (moved) savePosition();
+      if (moved) {
+        STATE.positionRevision += 1;
+        savePosition();
+      }
       else promptJumpPage();
     };
 
@@ -1733,7 +1744,10 @@
       pointerId = null;
       STATE.dragging = false;
       box.classList.remove("dragging");
-      if (moved) savePosition();
+      if (moved) {
+        STATE.positionRevision += 1;
+        savePosition();
+      }
     });
   }
 
@@ -1757,7 +1771,7 @@
     }
 
     const hasPagination = Boolean(STATE.prev || STATE.next);
-    const box = await createMenu();
+    const box = createMenu();
     box.dataset.hidden = "false";
     box.dataset.pagination = hasPagination ? "true" : "false";
     box.querySelector(".page span").textContent = STATE.currentPage;
@@ -1843,23 +1857,33 @@
     });
   }
 
-  async function init() {
+  function init() {
     if (STATE.initialized) return;
-    STATE.initialized = true;
 
-    try {
-      STATE.enabled = await gmGet(ENABLE_KEY, true);
-    } catch (_) {
-      STATE.initialized = false;
-      setTimeout(init, 120);
+    const observeRoot = document.documentElement || document.body;
+    if (!observeRoot) {
+      setTimeout(init, 80);
       return;
     }
+    STATE.initialized = true;
+
+    // 基础守护先同步安装；GM 设置读取变慢或异常时也不会阻塞按钮出现。
+    createMenu();
+    gmGet(ENABLE_KEY, true).then((enabled) => {
+      STATE.settingsLoaded = true;
+      STATE.enabled = enabled !== false;
+      scheduleUpdate(0);
+    }).catch(() => {
+      STATE.settingsLoaded = true;
+      STATE.enabled = true;
+      scheduleUpdate(0);
+    });
 
     if (typeof GM !== "undefined" && GM.registerMenuCommand) {
       GM.registerMenuCommand("📍 重置悬浮菜单位置", async () => {
+        STATE.positionRevision += 1;
         STATE.savedPosition = null;
         await gmSet(POS_KEY, null);
-        const box = $(`#${SCRIPT_ID}`);
         if (box) applyDefaultMenuPosition(box);
         scheduleUpdate(0);
       });
@@ -1868,13 +1892,6 @@
     hookHistory();
     normalizeXVideosHashLater();
     scheduleUpdateBurst();
-
-    const observeRoot = document.documentElement || document.body;
-    if (!observeRoot) {
-      STATE.initialized = false;
-      setTimeout(init, 80);
-      return;
-    }
 
     STATE.observer = new MutationObserver((mutations) => {
       const bodyChanged = mutations.some(mutation => [...mutation.addedNodes, ...mutation.removedNodes].some(node => node === document.body))
