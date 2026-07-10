@@ -1075,7 +1075,7 @@ function VersionHistoryView() {
   async function deleteVersion(version: CloudBackup) {
     const ok = await Dialog.confirm({
       title: `删除 ${version.name}？`,
-       message: `只删除这个历史快照，不会影响当前本机或当前 WebDAV。\n\n${version.summary.label}`,
+      message: `将从 WebDAV 永久删除这个历史快照。\n\n${version.summary.label}`,
       confirmLabel: "删除",
       cancelLabel: "取消",
     })
@@ -1098,7 +1098,7 @@ function VersionHistoryView() {
 
     const ok = await Dialog.confirm({
       title: `删除 ${selectedVersions.length} 个历史版本？`,
-      message: "只删除选中的历史快照，不会影响当前本机或当前 WebDAV。此操作无法撤销。",
+      message: `将从 WebDAV 永久删除选中的 ${selectedVersions.length} 个历史快照。此操作无法撤销。`,
       confirmLabel: "删除",
       cancelLabel: "取消",
     })
