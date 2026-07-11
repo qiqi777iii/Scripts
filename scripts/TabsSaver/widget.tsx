@@ -1,25 +1,21 @@
 import { HStack, Image, Link, Script, Spacer, Text, VStack, Widget } from "scripting"
-import { getFavorites, loadStore, totalBookmarkCount, type Store } from "./store"
+import { loadStore, totalBookmarkCount, type Bookmark, type Store } from "./store"
 
-function WidgetView({ store }: { store: Store }) {
+function recentBookmarks(store: Store): Bookmark[] {
+  return store.groups
+    .flatMap(group => group.bookmarks)
+    .sort((a, b) => b.savedAt - a.savedAt)
+    .slice(0, 3)
+}
+
+function SmallWidget({ store }: { store: Store }) {
   const total = totalBookmarkCount(store)
-  const favorites = getFavorites(store).length
-  const groups = store.groups.length
-  const compact = Widget.family === "systemSmall"
 
   return (
-    <Link url={Script.createRunSingleURLScheme("Tabs Saver")}>
-      <VStack
-        padding={compact ? 14 : 16}
-        alignment="center"
-        spacing={compact ? 7 : 9}
-      >
+    <Link url={Script.createRunSingleURLScheme("Tabs Saver")} buttonStyle="plain">
+      <VStack padding={14} alignment="center" spacing={7}>
         <HStack spacing={8}>
-          <Image
-            systemName="bookmark.fill"
-            foregroundStyle="systemBlue"
-            font={compact ? 22 : 24}
-          />
+          <Image systemName="bookmark.fill" foregroundStyle="systemBlue" font={22} />
           <Text font="headline" fontWeight="bold" lineLimit={1}>
             标签页收藏
           </Text>
@@ -28,7 +24,7 @@ function WidgetView({ store }: { store: Store }) {
         <Spacer />
 
         <Text
-          font={compact ? 52 : 58}
+          font={52}
           fontWeight="bold"
           fontDesign="rounded"
           foregroundStyle="systemBlue"
@@ -37,24 +33,9 @@ function WidgetView({ store }: { store: Store }) {
         >
           {String(total)}
         </Text>
-        <Text
-          font={compact ? "headline" : "title3"}
-          fontWeight="semibold"
-          foregroundStyle="secondaryLabel"
-        >
+        <Text font="headline" fontWeight="semibold" foregroundStyle="secondaryLabel">
           已收藏网页
         </Text>
-
-        {!compact && (
-          <HStack spacing={18}>
-            <Text font="caption" foregroundStyle="secondaryLabel">
-              {`${groups} 个分组`}
-            </Text>
-            <Text font="caption" foregroundStyle="secondaryLabel">
-              {`${favorites} 个星标`}
-            </Text>
-          </HStack>
-        )}
 
         <Spacer />
       </VStack>
@@ -62,9 +43,69 @@ function WidgetView({ store }: { store: Store }) {
   )
 }
 
+function RecentRow({ bookmark }: { bookmark: Bookmark }) {
+  let domain = bookmark.url
+  try {
+    domain = new URL(bookmark.url).hostname.replace(/^www\./, "")
+  } catch {}
+
+  return (
+    <Link url={bookmark.url} buttonStyle="plain">
+      <HStack spacing={9}>
+        <Image systemName="safari" foregroundStyle="systemBlue" font={16} />
+        <VStack alignment="leading" spacing={2}>
+          <Text font="subheadline" fontWeight="semibold" lineLimit={1}>
+            {bookmark.title || domain}
+          </Text>
+          <Text font="caption2" foregroundStyle="secondaryLabel" lineLimit={1}>
+            {domain}
+          </Text>
+        </VStack>
+        <Spacer />
+        <Image systemName="arrow.up.right" foregroundStyle="tertiaryLabel" font="caption2" />
+      </HStack>
+    </Link>
+  )
+}
+
+function MediumWidget({ store }: { store: Store }) {
+  const recent = recentBookmarks(store)
+
+  return (
+    <VStack padding={14} alignment="leading" spacing={8}>
+      <HStack spacing={7}>
+        <Image systemName="bookmark.fill" foregroundStyle="systemBlue" font={19} />
+        <Text font="headline" fontWeight="bold">最近收藏</Text>
+        <Spacer />
+        <Text font="caption" foregroundStyle="secondaryLabel">
+          {`${totalBookmarkCount(store)} 个`}
+        </Text>
+      </HStack>
+
+      {recent.length > 0 ? (
+        <VStack alignment="leading" spacing={8}>
+          {recent.map(bookmark => (
+            <RecentRow key={bookmark.id} bookmark={bookmark} />
+          ))}
+        </VStack>
+      ) : (
+        <VStack alignment="center" spacing={6}>
+          <Spacer />
+          <Image systemName="bookmark" foregroundStyle="secondaryLabel" font={24} />
+          <Text font="subheadline" foregroundStyle="secondaryLabel">还没有收藏网页</Text>
+          <Spacer />
+        </VStack>
+      )}
+    </VStack>
+  )
+}
+
 async function runWidget() {
   const store = await loadStore()
-  Widget.present(<WidgetView store={store} />, { policy: "never" })
+  const view = Widget.family === "systemSmall"
+    ? <SmallWidget store={store} />
+    : <MediumWidget store={store} />
+  Widget.present(view, { policy: "never" })
 }
 
 runWidget()
