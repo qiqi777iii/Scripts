@@ -58,7 +58,6 @@ import {
   pullFromCloud,
   listCloudBackups,
   restoreCloudBackup,
-  getCloudCurrentVersion,
   getLocalCurrentVersion,
   deleteCloudBackup,
   getSyncMeta,
@@ -125,10 +124,18 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const GROUP_SEPARATOR_KEY = "tab.showGroupSeparators"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.3.0"
+const APP_VERSION = "1.3.1"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "1.3.1",
+    date: "2026-07-12",
+    items: [
+      "WebDAV 菜单将“恢复当前 WebDAV”和“历史版本”合并为“恢复”。",
+      "恢复页面只保留当前本机与 WebDAV 备份，点击备份即可选择恢复。",
+    ],
+  },
   {
     version: "1.3.0",
     date: "2026-07-12",
@@ -570,29 +577,6 @@ function MainView() {
     await handleWebDAVPushResult(r)
   }
 
-  async function onSyncDown() {
-    if (syncing) return
-    if (!webDAVConfigured()) {
-      await Dialog.alert({
-        title: "WebDAV 未配置",
-        message: "请先打开 WebDAV 设置并填写连接信息。",
-      })
-      return
-    }
-    const ok = await Dialog.confirm({
-      title: "从 WebDAV 恢复？",
-      message: "将下载 WebDAV 当前数据并覆盖本机全部收藏，无法撤销。",
-      confirmLabel: "恢复",
-    })
-    if (!ok) return
-    setSyncing(true)
-    const r = await pullFromCloud()
-    setSyncing(false)
-    setSyncMeta(getSyncMeta())
-    if (r.ok) await reload()
-    await Dialog.alert({ title: r.ok ? "恢复完成" : "恢复失败", message: r.message })
-  }
-
   async function openWebDAVHistory() {
     if (!webDAVConfigured()) {
       await Dialog.alert({
@@ -699,13 +683,8 @@ function MainView() {
                   action={onSyncUp}
                 />
                 <Button
-                  title="恢复当前 WebDAV"
-                  systemImage="arrow.down"
-                  action={onSyncDown}
-                />
-                <Button
-                  title="历史版本"
-                  systemImage="clock.arrow.circlepath"
+                  title="恢复"
+                  systemImage="arrow.uturn.backward"
                   action={openWebDAVHistory}
                 />
                 <Button
@@ -1086,21 +1065,17 @@ function VersionHistoryView() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [local, setLocal] = useState<CloudBackup | null>(null)
-  const [current, setCurrent] = useState<CloudBackup | null>(null)
   const [backups, setBackups] = useState<CloudBackup[]>([])
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
 
   const providerName = "WebDAV"
-  const currentName = "当前 WebDAV"
 
   async function reloadVersions() {
     setLoading(true)
     const localVersion = await getLocalCurrentVersion()
-    const currentVersion = await getCloudCurrentVersion()
     const history = await listCloudBackups(100)
     setLocal(localVersion)
-    setCurrent(currentVersion)
     setBackups(history)
     setSelected(selected.filter(path => history.some((backup: CloudBackup) => backup.path === path)))
     setLoading(false)
@@ -1275,7 +1250,7 @@ function VersionHistoryView() {
   return (
     <NavigationStack>
       <List
-        navigationTitle={`${providerName} 历史版本`}
+        navigationTitle="WebDAV 恢复"
         navigationBarTitleDisplayMode="inline"
         safeAreaInset={
           selecting
@@ -1375,15 +1350,9 @@ function VersionHistoryView() {
               </Section>
             ) : null}
 
-            <Section header={<Text>{currentName}</Text>}>
-              {current ? versionRow(current, "externaldrive.fill", "systemGreen") : (
-                <Text foregroundStyle="secondaryLabel">暂无当前版本</Text>
-              )}
-            </Section>
-
-            <Section header={<Text>历史快照</Text>} footer={<Text>{busy ? "正在处理…" : `共 ${backups.length} 个历史版本`}</Text>}>
+            <Section header={<Text>WebDAV 备份</Text>} footer={<Text>{busy ? "正在处理…" : `共 ${backups.length} 个备份`}</Text>}>
               {backups.length === 0 ? (
-                <Text foregroundStyle="secondaryLabel">暂无历史快照。上传一次后会自动生成。</Text>
+                <Text foregroundStyle="secondaryLabel">暂无 WebDAV 备份。上传新数据后会自动保留被替换的版本。</Text>
               ) : backups.map((backup: CloudBackup) => versionRow(backup, "clock.arrow.circlepath", "systemOrange", true))}
             </Section>
           </>
