@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.60
+// @version      1.0.61
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @description  自动识别页面的上一页和下一页，并提供可拖动的悬浮翻页按钮。
@@ -1629,7 +1629,7 @@
         </svg>
       </button>
       <button class="prev pager-item" type="button" title="上一页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 18l-6-6 6-6"></path></svg></button>
-      <div class="page pager-item" title="点击选择页码，按住拖动位置（复原请用扩展菜单）">第 <span>?</span> 页</div>
+      <div class="page pager-item" title="点击选择页码，按住拖动位置（复原请用扩展菜单）"><span>?</span></div>
       <button class="next pager-item" type="button" title="下一页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 18l6-6-6-6"></path></svg></button>
     `;
     isolateFloatingUi(box);
