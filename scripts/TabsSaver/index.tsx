@@ -134,6 +134,7 @@ const CHANGELOG_ENTRIES: ChangelogEntry[] = [
     items: [
       "WebDAV 菜单将“恢复当前 WebDAV”和“历史版本”合并为“恢复”。",
       "恢复页面只保留当前本机与 WebDAV 备份，点击备份即可选择恢复。",
+      "恢复成功后直接提示完成，不再询问是否上传为 WebDAV 最新数据。",
     ],
   },
   {
@@ -1060,23 +1061,7 @@ function VersionHistoryView() {
       return
     }
 
-    const uploadAfter = await Dialog.confirm({
-      title: "是否设为最新？",
-      message: `已恢复到本机。是否立刻上传为 ${providerName} 最新？`,
-      confirmLabel: "上传为最新",
-      cancelLabel: "暂不上传",
-    })
-    if (uploadAfter) {
-      setBusy(true)
-      const pushed = await pushToCloud({ force: true, skipRiskCheck: true })
-      setBusy(false)
-      await Dialog.alert({
-        title: pushed.ok ? "已设为最新" : "上传失败",
-        message: pushed.message,
-      })
-    } else {
-      await Dialog.alert({ title: "恢复完成", message: restored.message })
-    }
+    await Dialog.alert({ title: "恢复完成", message: restored.message })
     await reloadVersions()
   }
 
