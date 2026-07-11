@@ -362,7 +362,6 @@ function MainView() {
     getShowGroupSeparators(),
   )
   const [displayRevision, setDisplayRevision] = useState(0)
-  const [domainQuery, setDomainQuery] = useState("")
 
   async function reload() {
     const s = await loadStore()
@@ -598,14 +597,6 @@ function MainView() {
   const groups = sortedGroups(store)
   const totalCount = totalBookmarkCount(store)
   const favCount = getFavorites(store).length
-  const normalizedDomainQuery = domainQuery.trim().toLowerCase()
-  const domainMatches = normalizedDomainQuery
-    ? groups.flatMap(group =>
-        group.bookmarks
-          .filter(bookmark => host(bookmark.url).toLowerCase().includes(normalizedDomainQuery))
-          .map(bookmark => ({ group, bookmark })),
-      )
-    : []
 
   return (
     <NavigationStack>
@@ -613,13 +604,6 @@ function MainView() {
         key={`main-list-${showGroupSeparators ? "lines" : "plain"}-${displayRevision}`}
         navigationTitle=""
         navigationBarTitleDisplayMode="inline"
-        searchable={{
-          value: domainQuery,
-          onChanged: setDomainQuery,
-          prompt: "搜索域名",
-          placement: "navigationBarDrawer",
-        }}
-        searchToolbarBehavior="minimize"
         listSectionSpacing="compact"
         listRowSpacing={0}
         environments={{ editMode }}
@@ -757,32 +741,6 @@ function MainView() {
           </Section>
         ) : (
           <>
-            {normalizedDomainQuery ? (
-              <Section
-                header={<Text>域名搜索结果</Text>}
-                footer={<Text>{`找到 ${domainMatches.length} 条收藏`}</Text>}
-              >
-                {domainMatches.length === 0 ? (
-                  <Text foregroundStyle="secondaryLabel">没有匹配的域名</Text>
-                ) : domainMatches.map(({ group, bookmark }) => (
-                  <Button
-                    key={`${group.id}-${bookmark.id}`}
-                    buttonStyle="plain"
-                    action={() => Safari.openURL(bookmark.url)}
-                  >
-                    <HStack spacing={10}>
-                      <Image systemName="globe" foregroundStyle="systemBlue" />
-                      <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-                        <Text lineLimit={1}>{bookmark.title}</Text>
-                        <Text font="footnote" foregroundStyle="secondaryLabel" lineLimit={1}>
-                          {`${group.name} · ${host(bookmark.url)}`}
-                        </Text>
-                      </VStack>
-                    </HStack>
-                  </Button>
-                ))}
-              </Section>
-            ) : null}
             <Section>
               <NavigationLink destination={<FavoritesView />}>
                 <HStack>
@@ -1366,7 +1324,6 @@ function GroupView({ groupId }: { groupId: string }) {
   const [loaded, setLoaded] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
-  const [searchQuery, setSearchQuery] = useState("")
 
   async function reload() {
     const s = await loadStore()
@@ -1375,15 +1332,6 @@ function GroupView({ groupId }: { groupId: string }) {
   }
 
   const group = store.groups.find((g: Group) => g.id === groupId)
-  const normalizedSearch = searchQuery.trim().toLowerCase()
-  const filteredBookmarks = group
-    ? group.bookmarks.filter(bookmark => {
-        if (!normalizedSearch) return true
-        return bookmark.title.toLowerCase().includes(normalizedSearch) ||
-          host(bookmark.url).toLowerCase().includes(normalizedSearch) ||
-          bookmark.url.toLowerCase().includes(normalizedSearch)
-      })
-    : []
 
   async function onDelete(bookmarkId: string) {
     if (!group) return
@@ -1451,10 +1399,10 @@ function GroupView({ groupId }: { groupId: string }) {
 
   function selectAll() {
     if (!group) return
-    if (selected.length === filteredBookmarks.length) {
+    if (selected.length === group.bookmarks.length) {
       setSelected([])
     } else {
-      setSelected(filteredBookmarks.map((b: Bookmark) => b.id))
+      setSelected(group.bookmarks.map((b: Bookmark) => b.id))
     }
   }
 
@@ -1472,19 +1420,12 @@ function GroupView({ groupId }: { groupId: string }) {
   }
 
   const allSelected =
-    filteredBookmarks.length > 0 && selected.length === filteredBookmarks.length
+    !!group && group.bookmarks.length > 0 && selected.length === group.bookmarks.length
 
   return (
     <List
       navigationTitle={group?.name ?? "分组"}
       navigationBarTitleDisplayMode="inline"
-      searchable={{
-        value: searchQuery,
-        onChanged: setSearchQuery,
-        prompt: "搜索标题、域名或网址",
-        placement: "navigationBarDrawer",
-      }}
-      searchToolbarBehavior="minimize"
       onAppear={reload}
       safeAreaInset={
         selecting
@@ -1593,10 +1534,8 @@ function GroupView({ groupId }: { groupId: string }) {
         <>
           {group.bookmarks.length === 0 ? (
             <Text foregroundStyle="secondaryLabel">这个分组还没有收藏</Text>
-          ) : filteredBookmarks.length === 0 ? (
-            <Text foregroundStyle="secondaryLabel">没有匹配的收藏</Text>
           ) : (
-            groupByDay(filteredBookmarks).map((sec: DaySection) => (
+            groupByDay(group.bookmarks).map((sec: DaySection) => (
           <Section
             key={sec.key}
             header={
