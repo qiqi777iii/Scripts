@@ -1,4 +1,4 @@
-import { Button, HStack, Image, Text, VStack, Widget, type ShapeStyle } from "scripting"
+import { Button, HStack, Image, Text, VStack, Widget, ZStack, type ShapeStyle } from "scripting"
 import { RefreshIPIntent } from "./app_intents"
 import { countryFlag, IPInfo, readCachedIPInfo, scoreColor } from "./data"
 
@@ -9,13 +9,17 @@ function CompactRow({ label, value, color = "label" }: { label: string, value: s
   </HStack>
 }
 
+function RefreshButton() {
+  return <Button title="刷新" systemImage="arrow.clockwise" intent={RefreshIPIntent(undefined)} />
+}
+
 function WidgetView({ info }: { info: IPInfo }) {
   const compact = Widget.family === "systemSmall"
   const score = info.score === null ? "—" : `${info.score}/100`
   const flag = countryFlag(info)
 
   if (compact) {
-    return <Button intent={RefreshIPIntent(undefined)}>
+    return <ZStack alignment="topTrailing">
       <VStack padding={12} alignment="center" spacing={4}>
         <Text font="caption2" foregroundStyle="secondaryLabel">IP 地址</Text>
         <Text font={20} fontWeight="bold" fontDesign="rounded" lineLimit={1} minScaleFactor={0.62}>{info.ip}</Text>
@@ -29,10 +33,11 @@ function WidgetView({ info }: { info: IPInfo }) {
         <CompactRow label="类型" value={info.nativeIP} color="systemBlue" />
         <CompactRow label="评分" value={score} color={scoreColor(info.score)} />
       </VStack>
-    </Button>
+      <RefreshButton />
+    </ZStack>
   }
 
-  return <Button intent={RefreshIPIntent(undefined)}>
+  return <ZStack alignment="topTrailing">
     <VStack padding={16} alignment="center" spacing={8}>
       <Text font="caption2" foregroundStyle="secondaryLabel">IP 地址</Text>
       <Text font={25} fontWeight="bold" fontDesign="rounded" lineLimit={1} minScaleFactor={0.62}>{info.ip}</Text>
@@ -56,17 +61,19 @@ function WidgetView({ info }: { info: IPInfo }) {
         <Text font="caption" fontWeight="bold" foregroundStyle={scoreColor(info.score)}>{score}</Text>
       </HStack>
     </VStack>
-  </Button>
+    <RefreshButton />
+  </ZStack>
 }
 
 function EmptyWidget() {
-  return <Button intent={RefreshIPIntent(undefined)}>
+  return <ZStack alignment="topTrailing">
     <VStack padding={16} alignment="center" spacing={8}>
       <Image systemName="network" foregroundStyle="systemBlue" font={24} />
-      <Text font="headline" fontWeight="bold">点按查询当前 IP</Text>
-      <Text font="caption" foregroundStyle="secondaryLabel">点按刷新并获取当前 IP</Text>
+      <Text font="headline" fontWeight="bold">暂无 IP 数据</Text>
+      <Text font="caption" foregroundStyle="secondaryLabel">点击右上角刷新</Text>
     </VStack>
-  </Button>
+    <RefreshButton />
+  </ZStack>
 }
 
 function runWidget() {
