@@ -11,8 +11,8 @@ function WidgetView({ store }: { store: Store }) {
     <Link url={Script.createRunSingleURLScheme("Tabs Saver")}>
       <VStack
         padding={compact ? 14 : 16}
-        alignment="leading"
-        spacing={compact ? 8 : 10}
+        alignment="center"
+        spacing={compact ? 7 : 9}
       >
         <HStack spacing={8}>
           <Image
@@ -28,19 +28,25 @@ function WidgetView({ store }: { store: Store }) {
         <Spacer />
 
         <Text
-          font={compact ? 34 : 38}
+          font={compact ? 52 : 58}
           fontWeight="bold"
           fontDesign="rounded"
           foregroundStyle="systemBlue"
+          lineLimit={1}
+          minScaleFactor={0.7}
         >
           {String(total)}
         </Text>
-        <Text font="caption" foregroundStyle="secondaryLabel">
+        <Text
+          font={compact ? "headline" : "title3"}
+          fontWeight="semibold"
+          foregroundStyle="secondaryLabel"
+        >
           已收藏网页
         </Text>
 
         {!compact && (
-          <HStack spacing={14}>
+          <HStack spacing={18}>
             <Text font="caption" foregroundStyle="secondaryLabel">
               {`${groups} 个分组`}
             </Text>
@@ -50,12 +56,7 @@ function WidgetView({ store }: { store: Store }) {
           </HStack>
         )}
 
-        <HStack spacing={5}>
-          <Text font="caption" fontWeight="semibold" foregroundStyle="systemBlue">
-            点按打开面板
-          </Text>
-          <Image systemName="chevron.right" foregroundStyle="systemBlue" font="caption2" />
-        </HStack>
+        <Spacer />
       </VStack>
     </Link>
   )
