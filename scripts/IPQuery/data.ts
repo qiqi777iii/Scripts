@@ -37,7 +37,8 @@ export function readCachedIPInfo(): IPInfo | null {
   return info
 }
 
-export async function fetchIPInfo(): Promise<IPInfo> {
+export async function fetchIPInfo(options: { interactiveVerification?: boolean } = {}): Promise<IPInfo> {
+  const interactiveVerification = options.interactiveVerification ?? true
   const web = new WebViewController()
   web.setCustomUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
 
@@ -51,7 +52,7 @@ export async function fetchIPInfo(): Promise<IPInfo> {
     await wait(500)
     let didPresentVerification = false
     const initialTitle = await web.evaluateJavaScript<string>("return document.title")
-    if (initialTitle === "安全验证") {
+    if (initialTitle === "安全验证" && interactiveVerification) {
       didPresentVerification = true
       await web.present({
         fullscreen: false,
@@ -92,7 +93,7 @@ export async function fetchIPInfo(): Promise<IPInfo> {
     `)
 
     let raw = await readPage()
-    if (!raw?.ip && !didPresentVerification) {
+    if (!raw?.ip && !didPresentVerification && interactiveVerification) {
       await web.present({
         fullscreen: false,
         navigationTitle: "完成验证后关闭此页面",
