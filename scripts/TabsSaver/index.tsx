@@ -31,11 +31,13 @@ import {
   removeGroup,
   moveGroupToTrash,
   moveBookmark,
+  moveBookmarks,
   moveBookmarksToTrash,
   getTrash,
   restoreTrashItem,
   permanentlyDeleteTrashItem,
   emptyTrash,
+  cleanupExpiredTrash,
   removeBookmark,
   removeBookmarks,
   markBookmarkRead,
@@ -52,6 +54,7 @@ import {
   type Bookmark,
   type Store,
   type TrashedBookmark,
+  type TrashRetentionDays,
 } from "./store"
 import {
   pushToCloud,
@@ -75,10 +78,13 @@ import {
   webDAVConfigured,
   webDAVDisplayPath,
   testWebDAVConnection,
+  getRestoreUndoInfo,
+  undoLastRestore,
   type AutoSyncProvider,
   type SyncMeta,
   type PushResult,
   type CloudBackup,
+  type RestoreUndoMeta,
 } from "./sync"
 
 function host(url: string): string {
@@ -122,12 +128,24 @@ function dayLabel(ts: number): string {
 type DaySection = { key: number; label: string; items: Bookmark[] }
 
 const GROUP_SEPARATOR_KEY = "tab.showGroupSeparators"
+const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.3.1"
+const APP_VERSION = "1.4.0"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "1.4.0",
+    date: "2026-07-12",
+    items: [
+      "WebDAV 恢复前自动保存本机保护副本，并支持撤销最近一次恢复。",
+      "WebDAV 备份列表显示文件大小及相对前一备份的新增、删除数量。",
+      "回收站支持永不、7 天、30 天或 90 天自动清理。",
+      "分组多选模式支持批量移动收藏。",
+      "主菜单重新分层为新建分组、回收站、WebDAV、显示设置和关于与更新。",
+    ],
+  },
   {
     version: "1.3.1",
     date: "2026-07-12",
@@ -329,6 +347,29 @@ function setShowGroupSeparators(value: boolean) {
   Storage.set(GROUP_SEPARATOR_KEY, value)
 }
 
+function getTrashRetentionDays(): TrashRetentionDays {
+  const value = Storage.get<number>(TRASH_RETENTION_KEY)
+  return value === 7 || value === 30 || value === 90 ? value : 0
+}
+
+function setTrashRetentionDays(value: TrashRetentionDays) {
+  Storage.set(TRASH_RETENTION_KEY, value)
+}
+
+function formatBytes(bytes?: number): string {
+  if (bytes == null) return "大小未知"
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function backupDetailLabel(backup: CloudBackup): string {
+  const size = formatBytes(backup.sizeBytes)
+  const diff = backup.diffFromPrevious
+  if (!diff) return `${size} · 最早备份`
+  return `${size} · 新增 ${diff.added} · 删除 ${diff.removed}`
+}
+
 function groupByDay(bookmarks: Bookmark[]): DaySection[] {
   const map = new Map<number, Bookmark[]>()
   for (const b of bookmarks) {
@@ -367,6 +408,7 @@ function MainView() {
   async function reload() {
     const s = await loadStore()
     let dirty = normalizeOrders(s)
+    if (cleanupExpiredTrash(s, getTrashRetentionDays()) > 0) dirty = true
     // First launch: materialize the store file with a default group so the
     // Safari userscript writes into an existing file (avoids
     // "write path is not allowed" on a not-yet-created file).
@@ -628,14 +670,9 @@ function MainView() {
               }
             >
               <Button
-                title="使用说明"
-                systemImage="questionmark.circle"
-                action={showGuide}
-              />
-              <Button
-                title="版本更新"
-                systemImage="sparkles"
-                action={showVersionUpdates}
+                title="新建分组"
+                systemImage="folder.badge.plus"
+                action={onNewGroup}
               />
               <Button
                 title="回收站"
@@ -648,37 +685,20 @@ function MainView() {
                   await reload()
                 }}
               />
-              <Button
-                title="新建分组"
-                systemImage="folder.badge.plus"
-                action={onNewGroup}
-              />
-              <Button
-                title="排序"
-                systemImage="arrow.up.arrow.down"
-                action={enterSort}
-              />
-              <Button
-                title={showGroupSeparators ? "隐藏分割线" : "显示分割线"}
-                systemImage={showGroupSeparators ? "line.3.horizontal.decrease" : "line.3.horizontal"}
-                action={onToggleGroupSeparators}
-              />
               <Menu title={`WebDAV · ${webDAVStatusLabel()}`} systemImage="externaldrive.connected.to.line.below">
-                <Button
-                  title="WebDAV 设置"
-                  systemImage="gearshape"
-                  action={openWebDAVSettings}
-                />
-                <Button
-                  title="上传"
-                  systemImage="arrow.up"
-                  action={onSyncUp}
-                />
-                <Button
-                  title="恢复"
-                  systemImage="arrow.uturn.backward"
-                  action={openWebDAVHistory}
-                />
+                <Button title="设置" systemImage="gearshape" action={openWebDAVSettings} />
+                <Button title="上传" systemImage="arrow.up" action={onSyncUp} />
+                <Button title="恢复" systemImage="arrow.uturn.backward" action={openWebDAVHistory} />
+                <Menu title={autoSyncTitle()} systemImage="clock.arrow.2.circlepath">
+                  {AUTO_SYNC_OPTIONS.map((opt: { label: string; seconds: number }) => (
+                    <Button
+                      key={`auto-${opt.seconds}`}
+                      title={opt.label}
+                      systemImage={opt.seconds === autoInterval ? "checkmark" : undefined}
+                      action={() => onChangeAutoInterval(opt.seconds)}
+                    />
+                  ))}
+                </Menu>
                 <Button
                   title={webDAVDisplayPath() || "尚未配置路径"}
                   systemImage="doc.text.magnifyingglass"
@@ -686,20 +706,17 @@ function MainView() {
                   action={() => {}}
                 />
               </Menu>
-              <Menu
-                title={autoSyncTitle()}
-                systemImage="clock.arrow.2.circlepath"
-              >
-                {AUTO_SYNC_OPTIONS.map((opt: { label: string; seconds: number }) => (
-                  <Button
-                    key={`auto-${opt.seconds}`}
-                    title={opt.label}
-                    systemImage={
-                      opt.seconds === autoInterval ? "checkmark" : undefined
-                    }
-                    action={() => onChangeAutoInterval(opt.seconds)}
-                  />
-                ))}
+              <Menu title="显示设置" systemImage="textformat.size">
+                <Button title="分组排序" systemImage="arrow.up.arrow.down" action={enterSort} />
+                <Button
+                  title={showGroupSeparators ? "隐藏分割线" : "显示分割线"}
+                  systemImage={showGroupSeparators ? "line.3.horizontal.decrease" : "line.3.horizontal"}
+                  action={onToggleGroupSeparators}
+                />
+              </Menu>
+              <Menu title="关于与更新" systemImage="info.circle">
+                <Button title="使用说明" systemImage="questionmark.circle" action={showGuide} />
+                <Button title="版本更新" systemImage="sparkles" action={showVersionUpdates} />
               </Menu>
             </Menu>
           ),
@@ -1024,6 +1041,7 @@ function VersionHistoryView() {
   const [busy, setBusy] = useState(false)
   const [local, setLocal] = useState<CloudBackup | null>(null)
   const [backups, setBackups] = useState<CloudBackup[]>([])
+  const [undoInfo, setUndoInfo] = useState<RestoreUndoMeta | null>(null)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
 
@@ -1033,8 +1051,10 @@ function VersionHistoryView() {
     setLoading(true)
     const localVersion = await getLocalCurrentVersion()
     const history = await listCloudBackups(100)
+    const undo = await getRestoreUndoInfo()
     setLocal(localVersion)
     setBackups(history)
+    setUndoInfo(undo)
     setSelected(selected.filter(path => history.some((backup: CloudBackup) => backup.path === path)))
     setLoading(false)
   }
@@ -1063,6 +1083,22 @@ function VersionHistoryView() {
 
     await Dialog.alert({ title: "恢复完成", message: restored.message })
     await reloadVersions()
+  }
+
+  async function undoRestore() {
+    if (!undoInfo || busy) return
+    const ok = await Dialog.confirm({
+      title: "撤销最近一次恢复？",
+      message: `将返回恢复前的本机数据：\n${undoInfo.beforeSummary.label}`,
+      confirmLabel: "撤销恢复",
+      cancelLabel: "取消",
+    })
+    if (!ok) return
+    setBusy(true)
+    const result = await undoLastRestore()
+    setBusy(false)
+    await Dialog.alert({ title: result.ok ? "已撤销恢复" : "撤销失败", message: result.message })
+    if (result.ok) await reloadVersions()
   }
 
   function toggleSelect(path: string) {
@@ -1174,6 +1210,9 @@ function VersionHistoryView() {
             <VStack alignment="leading" spacing={3}>
               <Text font="body" foregroundStyle="label">{version.name}</Text>
               <Text font="footnote" foregroundStyle="secondaryLabel">{version.summary.label}</Text>
+              {deletable ? (
+                <Text font="caption" foregroundStyle="tertiaryLabel">{backupDetailLabel(version)}</Text>
+              ) : null}
             </VStack>
           </HStack>
         </Button>
@@ -1292,6 +1331,20 @@ function VersionHistoryView() {
               </Section>
             ) : null}
 
+            {undoInfo ? (
+              <Section
+                header={<Text>恢复保护</Text>}
+                footer={<Text>{`保存于 ${formatTime(undoInfo.createdAt)}，撤销后返回恢复前数据。`}</Text>}
+              >
+                <Button
+                  title="撤销最近一次恢复"
+                  systemImage="arrow.uturn.backward.circle"
+                  disabled={busy}
+                  action={undoRestore}
+                />
+              </Section>
+            ) : null}
+
             <Section header={<Text>WebDAV 备份</Text>} footer={<Text>{busy ? "正在处理…" : `共 ${backups.length} 个备份`}</Text>}>
               {backups.length === 0 ? (
                 <Text foregroundStyle="secondaryLabel">暂无 WebDAV 备份。上传新数据后会自动保留被替换的版本。</Text>
@@ -1391,6 +1444,26 @@ function GroupView({ groupId }: { groupId: string }) {
     }
   }
 
+  async function moveSelected() {
+    if (!group || selected.length === 0) return
+    const targets = sortedGroups(store).filter(target => target.id !== group.id)
+    if (targets.length === 0) {
+      await Dialog.alert({ title: "没有其他分组", message: "请先新建一个目标分组。" })
+      return
+    }
+    const index = await Dialog.actionSheet({
+      title: `移动 ${selected.length} 条收藏`,
+      message: "选择目标分组",
+      actions: targets.map(target => ({ label: target.name })),
+    })
+    if (index == null || !targets[index]) return
+    const moved = moveBookmarks(store, group.id, selected, targets[index].id)
+    if (moved === 0) return
+    await saveStore(store)
+    setStore({ ...store })
+    exitSelect()
+  }
+
   async function deleteSelected() {
     if (!group || selected.length === 0) return
     const ok = await Dialog.confirm({
@@ -1458,6 +1531,16 @@ function GroupView({ groupId }: { groupId: string }) {
                           {`已选 ${selected.length}`}
                         </Text>
                       </VStack>
+                      <Button
+                        disabled={selected.length === 0}
+                        action={moveSelected}
+                        frame={{ maxWidth: "infinity" }}
+                      >
+                        <VStack spacing={3}>
+                          <Image systemName="folder" font="title3" foregroundStyle={selected.length === 0 ? "systemGray3" : "systemBlue"} />
+                          <Text font="caption2" foregroundStyle={selected.length === 0 ? "systemGray3" : "systemBlue"}>移动</Text>
+                        </VStack>
+                      </Button>
                       <Button
                         disabled={selected.length === 0}
                         action={deleteSelected}
@@ -1653,11 +1736,24 @@ function TrashView() {
   const dismiss = Navigation.useDismiss()
   const [store, setStore] = useState<Store>({ version: 1, groups: [] })
   const [loaded, setLoaded] = useState(false)
+  const [retentionDays, setRetentionDaysState] = useState<TrashRetentionDays>(() => getTrashRetentionDays())
 
   async function reload() {
     const next = await loadStore()
+    const removed = cleanupExpiredTrash(next, getTrashRetentionDays())
+    if (removed > 0) await saveStore(next)
     setStore({ ...next })
     setLoaded(true)
+  }
+
+  async function changeRetention(value: TrashRetentionDays) {
+    setTrashRetentionDays(value)
+    setRetentionDaysState(value)
+    const removed = cleanupExpiredTrash(store, value)
+    if (removed > 0) {
+      await saveStore(store)
+      setStore({ ...store })
+    }
   }
 
   async function restore(item: TrashedBookmark) {
@@ -1709,26 +1805,46 @@ function TrashView() {
       >
         {!loaded ? (
           <Text foregroundStyle="secondaryLabel">加载中…</Text>
-        ) : items.length === 0 ? (
-          <Text foregroundStyle="secondaryLabel">回收站为空</Text>
         ) : (
-          <Section footer={<Text>恢复时会回到原分组；原分组已删除时会重新建立。</Text>}>
-            {items.map(item => (
-              <HStack key={item.id} spacing={10}>
-                <Image systemName="trash" foregroundStyle="secondaryLabel" />
-                <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-                  <Text lineLimit={1}>{item.bookmark.title}</Text>
-                  <Text font="footnote" foregroundStyle="secondaryLabel" lineLimit={1}>
-                    {`${item.sourceGroupName} · ${host(item.bookmark.url)}`}
-                  </Text>
-                </VStack>
-                <Menu title="更多">
-                  <Button title="恢复" systemImage="arrow.uturn.backward" action={() => restore(item)} />
-                  <Button title="永久删除" systemImage="trash" role="destructive" action={() => removeForever(item)} />
-                </Menu>
-              </HStack>
-            ))}
-          </Section>
+          <>
+            <Section
+              header={<Text>自动清理</Text>}
+              footer={<Text>超过保留期限的内容会在打开标签页收藏时永久删除。</Text>}
+            >
+              <Picker
+                title="保留期限"
+                value={retentionDays}
+                onChanged={(value: number) => changeRetention(value as TrashRetentionDays)}
+                pickerStyle="menu"
+              >
+                <Text tag={0}>永不</Text>
+                <Text tag={7}>7 天</Text>
+                <Text tag={30}>30 天</Text>
+                <Text tag={90}>90 天</Text>
+              </Picker>
+            </Section>
+            {items.length === 0 ? (
+              <Text foregroundStyle="secondaryLabel">回收站为空</Text>
+            ) : (
+              <Section footer={<Text>恢复时会回到原分组；原分组已删除时会重新建立。</Text>}>
+                {items.map(item => (
+                  <HStack key={item.id} spacing={10}>
+                    <Image systemName="trash" foregroundStyle="secondaryLabel" />
+                    <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+                      <Text lineLimit={1}>{item.bookmark.title}</Text>
+                      <Text font="footnote" foregroundStyle="secondaryLabel" lineLimit={1}>
+                        {`${item.sourceGroupName} · ${host(item.bookmark.url)}`}
+                      </Text>
+                    </VStack>
+                    <Menu title="更多">
+                      <Button title="恢复" systemImage="arrow.uturn.backward" action={() => restore(item)} />
+                      <Button title="永久删除" systemImage="trash" role="destructive" action={() => removeForever(item)} />
+                    </Menu>
+                  </HStack>
+                ))}
+              </Section>
+            )}
+          </>
         )}
       </List>
     </NavigationStack>

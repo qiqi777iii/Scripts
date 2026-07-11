@@ -152,20 +152,33 @@ export function removeGroup(store: Store, groupId: string): void {
   store.groups = store.groups.filter(g => g.id !== groupId)
 }
 
+export type TrashRetentionDays = 0 | 7 | 30 | 90
+
+export function moveBookmarks(
+  store: Store,
+  sourceGroupId: string,
+  bookmarkIds: string[],
+  targetGroupId: string,
+): number {
+  if (sourceGroupId === targetGroupId) return 0
+  const source = store.groups.find(g => g.id === sourceGroupId)
+  const target = store.groups.find(g => g.id === targetGroupId)
+  if (!source || !target) return 0
+  const selected = new Set(bookmarkIds)
+  const moving = source.bookmarks.filter(bookmark => selected.has(bookmark.id))
+  if (moving.length === 0) return 0
+  source.bookmarks = source.bookmarks.filter(bookmark => !selected.has(bookmark.id))
+  target.bookmarks = [...moving, ...target.bookmarks]
+  return moving.length
+}
+
 export function moveBookmark(
   store: Store,
   sourceGroupId: string,
   bookmarkId: string,
   targetGroupId: string,
 ): boolean {
-  if (sourceGroupId === targetGroupId) return false
-  const source = store.groups.find(g => g.id === sourceGroupId)
-  const target = store.groups.find(g => g.id === targetGroupId)
-  const index = source?.bookmarks.findIndex(b => b.id === bookmarkId) ?? -1
-  if (!source || !target || index < 0) return false
-  const [bookmark] = source.bookmarks.splice(index, 1)
-  target.bookmarks.unshift(bookmark)
-  return true
+  return moveBookmarks(store, sourceGroupId, [bookmarkId], targetGroupId) > 0
 }
 
 function trashList(store: Store): TrashedBookmark[] {
@@ -197,7 +210,19 @@ export function moveGroupToTrash(store: Store, groupId: string): void {
 }
 
 export function getTrash(store: Store): TrashedBookmark[] {
-  return trashList(store).sort((a, b) => b.deletedAt - a.deletedAt)
+  return [...trashList(store)].sort((a, b) => b.deletedAt - a.deletedAt)
+}
+
+export function cleanupExpiredTrash(
+  store: Store,
+  retentionDays: TrashRetentionDays,
+  now = Date.now(),
+): number {
+  if (retentionDays === 0) return 0
+  const before = trashList(store).length
+  const cutoff = now - retentionDays * 24 * 60 * 60 * 1000
+  store.trash = trashList(store).filter(item => item.deletedAt >= cutoff)
+  return before - store.trash.length
 }
 
 export function restoreTrashItem(store: Store, trashId: string): boolean {

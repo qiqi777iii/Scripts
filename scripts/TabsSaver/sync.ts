@@ -13,6 +13,8 @@ const WEBDAV_USERNAME_KEY = "tab.webdav.username"
 const WEBDAV_PASSWORD_KEY = "tab.webdav.password"
 const WEBDAV_MAX_BACKUPS_KEY = "tab.webdav.maxBackups"
 const WEBDAV_KNOWN_BACKUPS_KEY = "tab.webdav.knownBackups"
+const RESTORE_UNDO_META_KEY = "tab.restoreUndoMeta"
+const RESTORE_UNDO_FILE = FileManager.safariBrowserDirectory + "/tabs-saver-restore-undo.json"
 const LARGE_DELETE_THRESHOLD = 5
 const LARGE_DELETE_RATIO = 0.75
 
@@ -34,12 +36,27 @@ export type StoreSummary = {
   updatedAt: number | null
   label: string
 }
+export type BackupDiff = { added: number; removed: number }
 export type CloudBackup = {
   path: string
   name: string
   summary: StoreSummary
   source?: "webdav" | "local"
   current?: boolean
+  sizeBytes?: number
+  diffFromPrevious?: BackupDiff
+}
+export type RestoreUndoMeta = {
+  createdAt: number
+  restoredFrom: string
+  beforeSummary: StoreSummary
+  afterSummary: StoreSummary
+}
+export type RestoreResult = {
+  ok: boolean
+  message: string
+  summary?: StoreSummary
+  undoAvailable?: boolean
 }
 export type PushResult = {
   ok: boolean
@@ -263,16 +280,50 @@ function rememberBackupName(name: string): void {
   if (!/^store-.*\.json$/.test(name)) return
   setKnownBackupNames([name, ...getKnownBackupNames()])
 }
-async function fetchBackupByName(name: string): Promise<Store | null> {
+type LoadedBackup = {
+  path: string
+  name: string
+  store: Store
+  sizeBytes: number
+}
+
+function isValidStore(value: unknown): value is Store {
+  return !!value && typeof value === "object" && Array.isArray((value as Store).groups)
+}
+
+function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).byteLength
+}
+
+function bookmarkIds(store: Store): Set<string> {
+  const ids = new Set<string>()
+  for (const group of store.groups || []) {
+    for (const bookmark of group.bookmarks || []) {
+      ids.add(bookmark.id ? `id:${bookmark.id}` : `url:${bookmark.url.trim().replace(/#.*$/, "").replace(/\/$/, "")}`)
+    }
+  }
+  return ids
+}
+
+function diffStores(current: Store, previous: Store): BackupDiff {
+  const currentIds = bookmarkIds(current)
+  const previousIds = bookmarkIds(previous)
+  let added = 0
+  let removed = 0
+  for (const id of currentIds) if (!previousIds.has(id)) added += 1
+  for (const id of previousIds) if (!currentIds.has(id)) removed += 1
+  return { added, removed }
+}
+
+async function fetchBackupByName(name: string): Promise<LoadedBackup | null> {
   try {
-    const res = await webdavRequest(
-      "GET",
-      `${backupDirUrl()}/${encodeURIComponent(name)}`,
-    )
+    const path = `${backupDirUrl()}/${encodeURIComponent(name)}`
+    const res = await webdavRequest("GET", path)
     if (!res.ok) return null
-    const parsed = JSON.parse(await res.text()) as Store
-    if (!parsed || !Array.isArray(parsed.groups)) return null
-    return parsed
+    const raw = await res.text()
+    const parsed = JSON.parse(raw) as Store
+    if (!isValidStore(parsed)) return null
+    return { path, name, store: parsed, sizeBytes: utf8ByteLength(raw) }
   } catch {
     return null
   }
@@ -349,6 +400,62 @@ async function withSyncLock<T>(fn: () => Promise<T>, busyValue: T): Promise<T> {
   }
 }
 
+async function saveRestoreUndoCopy(local: Store): Promise<void> {
+  await FileManager.writeAsString(RESTORE_UNDO_FILE, JSON.stringify(local))
+  const verified = JSON.parse(await FileManager.readAsString(RESTORE_UNDO_FILE)) as Store
+  if (!isValidStore(verified)) throw new Error("无法验证恢复前保护副本")
+}
+
+async function overwriteStoreWithUndo(target: Store, restoredFrom: string): Promise<RestoreResult> {
+  const local = await loadStore()
+  await saveRestoreUndoCopy(local)
+  await overwriteStore(target)
+  const meta: RestoreUndoMeta = {
+    createdAt: Date.now(),
+    restoredFrom,
+    beforeSummary: summarizeStore(local),
+    afterSummary: summarizeStore(target),
+  }
+  Storage.set(RESTORE_UNDO_META_KEY, JSON.stringify(meta))
+  return {
+    ok: true,
+    message: "已恢复到本机，并保存恢复前保护副本",
+    summary: meta.afterSummary,
+    undoAvailable: true,
+  }
+}
+
+export async function getRestoreUndoInfo(): Promise<RestoreUndoMeta | null> {
+  try {
+    if (!(await FileManager.exists(RESTORE_UNDO_FILE))) return null
+    const store = JSON.parse(await FileManager.readAsString(RESTORE_UNDO_FILE)) as Store
+    if (!isValidStore(store)) return null
+    const raw = Storage.get<string>(RESTORE_UNDO_META_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as RestoreUndoMeta
+  } catch {
+    return null
+  }
+}
+
+export async function undoLastRestore(): Promise<RestoreResult> {
+  return withSyncLock(async () => {
+    try {
+      if (!(await FileManager.exists(RESTORE_UNDO_FILE))) {
+        return { ok: false, message: "没有可撤销的恢复" }
+      }
+      const store = JSON.parse(await FileManager.readAsString(RESTORE_UNDO_FILE)) as Store
+      if (!isValidStore(store)) return { ok: false, message: "恢复保护副本格式无效" }
+      await overwriteStore(store)
+      await FileManager.remove(RESTORE_UNDO_FILE)
+      Storage.set(RESTORE_UNDO_META_KEY, "")
+      return { ok: true, message: "已返回恢复前的本机数据", summary: summarizeStore(store) }
+    } catch (e) {
+      return { ok: false, message: `撤销恢复失败：${String(e)}` }
+    }
+  }, { ok: false, message: "已有同步正在进行，请稍后再试" })
+}
+
 export async function testWebDAVConnection(): Promise<{
   ok: boolean
   message: string
@@ -422,9 +529,9 @@ export async function pullFromCloud(): Promise<{ ok: boolean; message: string }>
         setMeta("failed")
         return { ok: false, message: "WebDAV 暂无数据" }
       }
-      await overwriteStore(remote)
+      const restored = await overwriteStoreWithUndo(remote, "当前 WebDAV")
       setMeta("ok")
-      return { ok: true, message: "已从 WebDAV 恢复" }
+      return restored
     } catch (e) {
       setMeta("failed")
       return { ok: false, message: `WebDAV 恢复失败：${String(e)}` }
@@ -475,18 +582,21 @@ export async function listCloudBackups(limit = 100): Promise<CloudBackup[]> {
     names = names.slice(0, limit)
   }
 
-  const backups: CloudBackup[] = []
+  const loaded: LoadedBackup[] = []
   for (const name of names) {
-    const store = await fetchBackupByName(name)
-    if (!store) continue
-    backups.push({
-      path: `${backupDirUrl()}/${encodeURIComponent(name)}`,
-      name,
-      summary: summarizeStore(store),
-      source: "webdav",
-    })
+    const backup = await fetchBackupByName(name)
+    if (backup) loaded.push(backup)
   }
-  return backups
+  return loaded.map((backup, index) => ({
+    path: backup.path,
+    name: backup.name,
+    summary: summarizeStore(backup.store),
+    source: "webdav" as const,
+    sizeBytes: backup.sizeBytes,
+    diffFromPrevious: loaded[index + 1]
+      ? diffStores(backup.store, loaded[index + 1].store)
+      : undefined,
+  }))
 }
 export async function deleteCloudBackup(
   path: string,
@@ -524,13 +634,12 @@ export async function restoreCloudBackup(
       if (!parsed || !Array.isArray(parsed.groups)) {
         return { ok: false, message: "历史快照格式无效" }
       }
-      await overwriteStore(parsed)
+      const restored = await overwriteStoreWithUndo(
+        parsed,
+        decodeURIComponent(path.split("/").pop() || "WebDAV 备份"),
+      )
       setMeta("ok")
-      return {
-        ok: true,
-        message: "已恢复 WebDAV 历史快照到本机",
-        summary: summarizeStore(parsed),
-      }
+      return restored
     } catch (e) {
       setMeta("failed")
       return { ok: false, message: `恢复 WebDAV 历史快照失败：${String(e)}` }
