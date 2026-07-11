@@ -117,10 +117,18 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const GROUP_SEPARATOR_KEY = "tab.showGroupSeparators"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.2.9"
+const APP_VERSION = "1.2.12"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "1.2.12",
+    date: "2026-07-12",
+    items: [
+      "新增主屏幕小组件，显示收藏数量并可点按直接打开标签页收藏面板。",
+      "小组件支持小号和中号布局，中号会额外显示分组与星标数量。",
+    ],
+  },
   {
     version: "1.2.9",
     date: "2026-07-10",
