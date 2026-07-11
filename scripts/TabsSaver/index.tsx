@@ -613,6 +613,12 @@ function MainView() {
         key={`main-list-${showGroupSeparators ? "lines" : "plain"}-${displayRevision}`}
         navigationTitle=""
         navigationBarTitleDisplayMode="inline"
+        searchable={{
+          value: domainQuery,
+          onChanged: setDomainQuery,
+          prompt: "搜索域名",
+          placement: "navigationBarDrawerAutomaticDisplay",
+        }}
         listSectionSpacing="compact"
         listRowSpacing={0}
         environments={{ editMode }}
@@ -750,14 +756,6 @@ function MainView() {
           </Section>
         ) : (
           <>
-            <Section>
-              <TextField
-                title="域名搜索"
-                prompt="输入域名，例如 example.com"
-                value={domainQuery}
-                onChanged={setDomainQuery}
-              />
-            </Section>
             {normalizedDomainQuery ? (
               <Section
                 header={<Text>域名搜索结果</Text>}
@@ -1479,6 +1477,12 @@ function GroupView({ groupId }: { groupId: string }) {
     <List
       navigationTitle={group?.name ?? "分组"}
       navigationBarTitleDisplayMode="inline"
+      searchable={{
+        value: searchQuery,
+        onChanged: setSearchQuery,
+        prompt: "搜索标题、域名或网址",
+        placement: "navigationBarDrawerAutomaticDisplay",
+      }}
       onAppear={reload}
       safeAreaInset={
         selecting
@@ -1585,14 +1589,6 @@ function GroupView({ groupId }: { groupId: string }) {
         <Text foregroundStyle="secondaryLabel">该分组已不存在</Text>
       ) : (
         <>
-          <Section>
-            <TextField
-              title="搜索"
-              prompt="搜索标题、域名或网址"
-              value={searchQuery}
-              onChanged={setSearchQuery}
-            />
-          </Section>
           {group.bookmarks.length === 0 ? (
             <Text foregroundStyle="secondaryLabel">这个分组还没有收藏</Text>
           ) : filteredBookmarks.length === 0 ? (
