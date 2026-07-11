@@ -77,9 +77,6 @@ function MediumWidget({ store }: { store: Store }) {
         <Image systemName="bookmark.fill" foregroundStyle="systemBlue" font={19} />
         <Text font="headline" fontWeight="bold">最近收藏</Text>
         <Spacer />
-        <Text font="caption" foregroundStyle="secondaryLabel">
-          {`${totalBookmarkCount(store)} 个`}
-        </Text>
       </HStack>
 
       {recent.length > 0 ? (
