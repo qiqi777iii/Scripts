@@ -617,7 +617,7 @@ function MainView() {
           value: domainQuery,
           onChanged: setDomainQuery,
           prompt: "搜索域名",
-          placement: "navigationBarDrawerAutomaticDisplay",
+          placement: "navigationBarDrawer",
         }}
         listSectionSpacing="compact"
         listRowSpacing={0}
@@ -1481,7 +1481,7 @@ function GroupView({ groupId }: { groupId: string }) {
         value: searchQuery,
         onChanged: setSearchQuery,
         prompt: "搜索标题、域名或网址",
-        placement: "navigationBarDrawerAutomaticDisplay",
+        placement: "navigationBarDrawer",
       }}
       onAppear={reload}
       safeAreaInset={
