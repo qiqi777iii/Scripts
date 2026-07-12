@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.64
+// @version      1.0.65
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @description  自动识别页面的上一页和下一页，并提供可拖动的悬浮翻页按钮。
@@ -35,9 +35,7 @@
     currentPage: "?",
     lastUrl: location.href,
     observer: null,
-    settleObserver: null,
-    settleStopTimer: null,
-    burstTimers: [],
+    fallbackTimer: null,
     updateTimer: null,
     navigating: false,
     savedPosition: null,
@@ -503,7 +501,7 @@
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
     link.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
     link.click();
-    scheduleUpdateBurst();
+    scheduleEventUpdate();
   }
 
   function isMissAv() {
@@ -1192,6 +1190,19 @@
     button.addEventListener("click", run, { passive: false });
   }
 
+  function navigateDirection(direction) {
+    if (STATE.navigating) return;
+    // 点击时重新识别一次。这样异步渲染或局部替换分页 DOM 的网站无需常驻观察整页，
+    // 仍能在真正翻页前拿到最新且仍连接在文档中的按钮。
+    const candidate = findCandidate(direction);
+    STATE[direction] = candidate;
+    if (candidate) {
+      clickOrNavigate(candidate);
+      return;
+    }
+    scheduleUpdate(0);
+  }
+
   function clickOrNavigate(el) {
     if (!el || STATE.navigating) return;
     if (el.__paginationElement) {
@@ -1636,8 +1647,8 @@
     document.documentElement.appendChild(box);
     applyDefaultMenuPosition(box);
 
-    bindActionButton(box.querySelector(".prev"), () => clickOrNavigate(STATE.prev));
-    bindActionButton(box.querySelector(".next"), () => clickOrNavigate(STATE.next));
+    bindActionButton(box.querySelector(".prev"), () => navigateDirection("prev"));
+    bindActionButton(box.querySelector(".next"), () => navigateDirection("next"));
     bindActionButton(box.querySelector(".refresh"), reloadPage);
     setupPageControl(box, box.querySelector(".page"));
 
@@ -1802,37 +1813,17 @@
     STATE.updateTimer = setTimeout(() => runWhenIdle(updateMenu, 800), delay);
   }
 
-  function isOwnUiNode(node) {
-    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement
-    return Boolean(element?.closest?.(`#${SCRIPT_ID}, #${SCRIPT_ID}-style, #${SCRIPT_ID}-jump-mask`))
-  }
+  function scheduleEventUpdate(withFallback = true) {
+    scheduleUpdate(0);
+    if (STATE.fallbackTimer) clearTimeout(STATE.fallbackTimer);
+    STATE.fallbackTimer = null;
+    if (!withFallback) return;
 
-  function stopSettlingObserver() {
-    if (STATE.settleStopTimer) clearTimeout(STATE.settleStopTimer)
-    STATE.settleStopTimer = null
-    STATE.settleObserver?.disconnect()
-    STATE.settleObserver = null
-  }
-
-  function startSettlingObserver() {
-    stopSettlingObserver()
-    const body = document.body
-    if (!body) return
-    STATE.settleObserver = new MutationObserver((mutations) => {
-      if (mutations.some(mutation => [...mutation.addedNodes, ...mutation.removedNodes].some(node => !isOwnUiNode(node)))) {
-        scheduleUpdate(240)
-      }
-    })
-    STATE.settleObserver.observe(body, { childList: true, subtree: true })
-    STATE.settleStopTimer = setTimeout(stopSettlingObserver, 1800)
-  }
-
-  function scheduleUpdateBurst() {
-    // 仅在首次加载、SPA 导航和页面恢复后的短暂稳定窗口内观察页面内容。
-    // 结束后断开全页观察器；日常页面变化不会触发扫描。
-    STATE.burstTimers.forEach(clearTimeout)
-    STATE.burstTimers = [0, 180, 800].map((ms) => setTimeout(() => scheduleUpdate(0), ms))
-    startSettlingObserver()
+    // 只为晚渲染分页的站点保留一次低成本兜底；不观察 body 子树，也不持续轮询。
+    STATE.fallbackTimer = setTimeout(() => {
+      STATE.fallbackTimer = null;
+      if (!STATE.prev && !STATE.next) scheduleUpdate(0);
+    }, 1000);
   }
 
   function hookHistory() {
@@ -1849,11 +1840,11 @@
     wrap("replaceState");
     window.addEventListener("popstate", () => {
       STATE.navigating = false;
-      scheduleUpdateBurst();
+      scheduleEventUpdate();
     });
     window.addEventListener(`${SCRIPT_ID}:urlchange`, () => {
       STATE.navigating = false;
-      scheduleUpdateBurst();
+      scheduleEventUpdate();
     });
   }
 
@@ -1868,7 +1859,7 @@
     STATE.initialized = true;
 
     // 基础守护先同步安装；GM 设置读取变慢或异常时也不会阻塞按钮出现。
-    createMenu();
+    const box = createMenu();
     gmGet(ENABLE_KEY, true).then((enabled) => {
       STATE.settingsLoaded = true;
       STATE.enabled = enabled !== false;
@@ -1891,13 +1882,13 @@
 
     hookHistory();
     normalizeXVideosHashLater();
-    scheduleUpdateBurst();
+    scheduleEventUpdate();
 
     STATE.observer = new MutationObserver((mutations) => {
       const bodyChanged = mutations.some(mutation => [...mutation.addedNodes, ...mutation.removedNodes].some(node => node === document.body))
       const menuMissing = !document.getElementById(SCRIPT_ID)
       const styleMissing = !document.getElementById(`${SCRIPT_ID}-style`)
-      if (bodyChanged || menuMissing || styleMissing) scheduleUpdateBurst()
+      if (bodyChanged || menuMissing || styleMissing) scheduleEventUpdate()
     });
     // 只盯住 html 的直接子节点，用来发现 body 被整体替换；不常驻扫描整棵页面 DOM。
     STATE.observer.observe(observeRoot, { childList: true });
@@ -1934,7 +1925,7 @@
       if (!document.getElementById(SCRIPT_ID)) {
         STATE.savedPosition = STATE.savedPosition || null;
       }
-      scheduleUpdateBurst();
+      scheduleEventUpdate();
     };
 
     window.addEventListener("pageshow", watchdog);
@@ -1950,7 +1941,7 @@
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
       normalizeXVideosHashLater();
-      scheduleUpdateBurst();
+      scheduleEventUpdate();
     }, { once: true });
   }
 })();
