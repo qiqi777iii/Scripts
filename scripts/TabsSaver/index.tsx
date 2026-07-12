@@ -131,10 +131,17 @@ const GROUP_SEPARATOR_KEY = "tab.showGroupSeparators"
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.4.1"
+const APP_VERSION = "1.4.2"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "1.4.2",
+    date: "2026-07-12",
+    items: [
+      "同步上传遇到本机数据较少时，确认操作改为取消或仍然上传，不再混入 WebDAV 恢复流程。",
+    ],
+  },
   {
     version: "1.4.1",
     date: "2026-07-12",
@@ -574,35 +581,20 @@ function MainView() {
     if (r.risk) {
       const localText = r.localSummary?.label ?? "未知"
       const remoteText = r.remoteSummary?.label ?? "未知"
-      const message = `${r.message}\n\n本机：${localText}\nWebDAV：${remoteText}`
+      const message = `本机：${localText}\nWebDAV：${remoteText}\n\n仍然上传会先保存当前 WebDAV 快照，再上传本机数据。`
 
-      const useLocal = await Dialog.confirm({
-        title: "可能误删，已暂停上传",
-        message: `${message}\n\n要用本机数据覆盖 WebDAV 吗？上传前会先保存远端快照。`,
-        confirmLabel: "用本机覆盖",
-        cancelLabel: "其他选择",
-      })
-      if (useLocal) {
-        const forced = await pushToCloud({ force: true, skipRiskCheck: true })
-        setSyncMeta(getSyncMeta())
-        await Dialog.alert({ title: forced.ok ? "同步完成" : "同步失败", message: forced.message })
-        return forced.ok
-      }
-
-      const useRemote = await Dialog.confirm({
-        title: "恢复 WebDAV？",
-        message: "要改为从 WebDAV 恢复到本机吗？这会覆盖本机当前收藏。",
-        confirmLabel: "恢复 WebDAV",
+      const continueUpload = await Dialog.confirm({
+        title: "本机数据少于 WebDAV",
+        message,
+        confirmLabel: "仍然上传",
         cancelLabel: "取消",
       })
-      if (useRemote) {
-        const pulled = await pullFromCloud()
-        setSyncMeta(getSyncMeta())
-        if (pulled.ok) await reload()
-        await Dialog.alert({ title: pulled.ok ? "恢复完成" : "恢复失败", message: pulled.message })
-        return pulled.ok
-      }
-      return false
+      if (!continueUpload) return false
+
+      const forced = await pushToCloud({ force: true, skipRiskCheck: true })
+      setSyncMeta(getSyncMeta())
+      await Dialog.alert({ title: forced.ok ? "同步完成" : "同步失败", message: forced.message })
+      return forced.ok
     }
 
     await Dialog.alert({ title: "同步失败", message: r.message })
