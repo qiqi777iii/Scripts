@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 0.2.22
+// @version 0.2.23
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -39,7 +39,6 @@
   let startX = 0, startY = 0, startLeft = 0, startTop = 0
   let menuRegistered = false
   let positionSyncScheduled = false
-  let singleClickTimer = null
   let bodyObserver = null
   let rootObserver = null
   let observedBody = null
@@ -255,44 +254,48 @@
     return group
   }
 
-  async function showSaveDialog(kind) {
+  async function showSaveDialog() {
     document.getElementById(DIALOG_ID)?.remove()
     document.getElementById(PICKER_ID)?.remove()
 
     const currentSelection = await tabsForMode("current")
-    let allSelection = null
-    let groups = []
-    if (kind === "scope") allSelection = await tabsForMode("all")
-    else {
-      const { file } = storePath()
-      const store = await loadStore(file)
-      ensureDefaultGroup(store)
-      await saveStore(file, store)
-      groups = sortGroups(ensureGroups(store))
-    }
+    const allSelection = await tabsForMode("all")
+    const { file } = storePath()
+    const store = await loadStore(file)
+    ensureDefaultGroup(store)
+    await saveStore(file, store)
+    const groups = sortGroups(ensureGroups(store))
+    const currentId = currentSelection.currentId
 
     const overlay = document.createElement("div")
     overlay.id = DIALOG_ID
-    const scopeContent = kind === "scope" ? `
-      <div class="qts-dialog-section-title">收藏范围</div>
-      <label class="qts-dialog-choice"><input type="radio" name="qts-scope" value="current" checked><span>当前标签页</span></label>
-      <label class="qts-dialog-choice"><input type="radio" name="qts-scope" value="all"><span>全部标签页</span></label>` : `
-      <div class="qts-dialog-section-title">收藏到标签组</div>
-      <div class="qts-dialog-group-row">
-        <select class="qts-dialog-group" aria-label="收藏到标签组">
-          ${groups.map(group => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name || DEFAULT_GROUP_NAME)}（${Array.isArray(group.bookmarks) ? group.bookmarks.length : 0}）</option>`).join("")}
-        </select>
-        <button type="button" class="qts-dialog-new-group">＋</button>
-      </div>`
     overlay.innerHTML = `
       <div class="qts-dialog-card" role="dialog" aria-modal="true" aria-label="保存会话">
         <div class="qts-dialog-title">保存会话</div>
-        ${scopeContent}
-        <div class="qts-dialog-count">${currentSelection.tabs.length} 个标签页</div>
-        <label class="qts-dialog-option">
-          <input type="checkbox" class="qts-dialog-close">
-          <span>保存后关闭标签页</span>
-        </label>
+        <div class="qts-dialog-scroll">
+          <div class="qts-dialog-section-title">收藏范围</div>
+          <label class="qts-dialog-choice"><input type="radio" name="qts-scope" value="current" checked><span>当前标签页</span></label>
+          <label class="qts-dialog-choice"><input type="radio" name="qts-scope" value="all"><span>全部标签页</span></label>
+          <label class="qts-dialog-choice"><input type="radio" name="qts-scope" value="selected"><span>选择标签页</span></label>
+          <div class="qts-tab-picker" hidden>
+            <div class="qts-tab-picker-tools"><span>选择已打开的标签页</span><button type="button" class="qts-select-all">全选</button></div>
+            <div class="qts-tab-list">
+              ${allSelection.tabs.map((tab, index) => `<label class="qts-tab-row"><input type="checkbox" value="${index}" ${tab.id === currentId ? "checked" : ""}><span><strong>${escapeHtml(tab.title || tab.url)}</strong><small>${escapeHtml(tab.url)}</small></span></label>`).join("")}
+            </div>
+          </div>
+          <div class="qts-dialog-section-title">收藏到</div>
+          <div class="qts-dialog-group-row">
+            <select class="qts-dialog-group" aria-label="收藏到标签组">
+              ${groups.map(group => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name || DEFAULT_GROUP_NAME)}（${Array.isArray(group.bookmarks) ? group.bookmarks.length : 0}）</option>`).join("")}
+            </select>
+            <button type="button" class="qts-dialog-new-group">＋</button>
+          </div>
+          <div class="qts-dialog-count">${currentSelection.tabs.length} 个标签页</div>
+          <label class="qts-dialog-option">
+            <input type="checkbox" class="qts-dialog-close">
+            <span>保存后关闭标签页</span>
+          </label>
+        </div>
         <div class="qts-dialog-actions">
           <button type="button" class="qts-dialog-cancel">取消</button>
           <button type="button" class="qts-dialog-save">保存</button>
@@ -304,20 +307,31 @@
     const closeAfter = overlay.querySelector(".qts-dialog-close")
     const count = overlay.querySelector(".qts-dialog-count")
     const groupSelect = overlay.querySelector(".qts-dialog-group")
+    const tabPicker = overlay.querySelector(".qts-tab-picker")
+    const tabChecks = [...overlay.querySelectorAll(".qts-tab-row input")]
     const scopeInputs = [...overlay.querySelectorAll('input[name="qts-scope"]')]
-    for (const input of scopeInputs) {
-      input.addEventListener("change", () => {
-        count.textContent = (input.value === "all" ? allSelection.tabs.length : currentSelection.tabs.length) + " 个标签页"
-      })
+
+    const selectedTabs = () => tabChecks.filter(input => input.checked).map(input => allSelection.tabs[Number(input.value)])
+    const updateCount = () => {
+      const scope = scopeInputs.find(input => input.checked)?.value || "current"
+      tabPicker.hidden = scope !== "selected"
+      const amount = scope === "all" ? allSelection.tabs.length : scope === "selected" ? selectedTabs().length : currentSelection.tabs.length
+      count.textContent = amount + " 个标签页"
     }
-    overlay.querySelector(".qts-dialog-new-group")?.addEventListener("click", async () => {
+    for (const input of scopeInputs) input.addEventListener("change", updateCount)
+    for (const input of tabChecks) input.addEventListener("change", updateCount)
+    overlay.querySelector(".qts-select-all").addEventListener("click", event => {
+      const shouldSelect = tabChecks.some(input => !input.checked)
+      for (const input of tabChecks) input.checked = shouldSelect
+      event.currentTarget.textContent = shouldSelect ? "取消全选" : "全选"
+      updateCount()
+    })
+    overlay.querySelector(".qts-dialog-new-group").addEventListener("click", async () => {
       const name = window.prompt("新建分组名称")
       if (name === null) return
       try {
         const group = await createEmptyGroup(name)
-        if (![...groupSelect.options].some(option => option.value === group.id)) {
-          groupSelect.add(new Option(`${group.name}（0）`, group.id))
-        }
+        if (![...groupSelect.options].some(option => option.value === group.id)) groupSelect.add(new Option(`${group.name}（0）`, group.id))
         groupSelect.value = group.id
       } catch (error) {
         showToast(error?.message || "新建失败")
@@ -326,12 +340,16 @@
     cancel.addEventListener("click", () => overlay.remove())
     overlay.addEventListener("click", event => { if (event.target === overlay) overlay.remove() })
     save.addEventListener("click", async () => {
+      const scope = scopeInputs.find(input => input.checked)?.value || "current"
+      const tabs = scope === "all" ? allSelection.tabs : scope === "selected" ? selectedTabs() : currentSelection.tabs
+      if (!tabs.length) {
+        showToast("请至少选择一个标签页")
+        return
+      }
       cancel.disabled = true
       save.disabled = true
       try {
-        const scope = scopeInputs.find(input => input.checked)?.value || "current"
-        const selection = scope === "all" ? allSelection : currentSelection
-        await saveTabs(selection.tabs, selection.currentId, kind === "group" ? groupSelect.value : null, closeAfter.checked)
+        await saveTabs(tabs, currentId, groupSelect.value, closeAfter.checked)
         overlay.remove()
       } catch (error) {
         showToast(error?.message || "收藏失败")
@@ -454,7 +472,8 @@
 #${PICKER_ID} .qts-count{font-size:12px;color:#8E8E93;font-weight:500;}
 #${TOAST_ID}{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.76);color:white;font:14px/18px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .2s;pointer-events:none;}
 #${DIALOG_ID}{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.34);font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#111;}
-#${DIALOG_ID} .qts-dialog-card{width:min(340px,calc(100vw - 48px));padding:24px 20px 18px;border-radius:24px;background:rgba(248,248,248,.96);-webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);box-shadow:0 20px 60px rgba(0,0,0,.28);}
+#${DIALOG_ID} .qts-dialog-card{width:min(360px,calc(100vw - 32px));max-height:calc(100vh - 32px);display:flex;flex-direction:column;padding:24px 20px 18px;border-radius:24px;background:rgba(248,248,248,.96);-webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);box-shadow:0 20px 60px rgba(0,0,0,.28);}
+#${DIALOG_ID} .qts-dialog-scroll{min-height:0;overflow:auto;}
 #${DIALOG_ID} .qts-dialog-title{font-size:24px;font-weight:700;line-height:30px;}
 #${DIALOG_ID} .qts-dialog-section-title{margin-top:18px;margin-bottom:6px;font-size:13px;font-weight:600;color:#8E8E93;}
 #${DIALOG_ID} .qts-dialog-choice{display:flex;align-items:center;gap:11px;padding:9px 0;font-size:17px;}
@@ -462,10 +481,20 @@
 #${DIALOG_ID} .qts-dialog-group-row{display:flex;align-items:center;gap:8px;margin-top:8px;}
 #${DIALOG_ID} .qts-dialog-group{min-width:0;flex:1;height:46px;padding:0 12px;border:0;border-radius:12px;background:#E5E5EA;color:#111;font-size:16px;}
 #${DIALOG_ID} .qts-dialog-new-group{width:46px;height:46px;border:0;border-radius:12px;background:#E5E5EA;color:#007AFF;font-size:24px;}
+#${DIALOG_ID} .qts-tab-picker{margin:6px 0 12px;padding:10px;border-radius:14px;background:rgba(118,118,128,.1);}
+#${DIALOG_ID} .qts-tab-picker-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:13px;color:#8E8E93;}
+#${DIALOG_ID} .qts-select-all{border:0;background:transparent;color:#007AFF;font-size:13px;}
+#${DIALOG_ID} .qts-tab-list{max-height:220px;overflow:auto;}
+#${DIALOG_ID} .qts-tab-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:.5px solid rgba(60,60,67,.16);}
+#${DIALOG_ID} .qts-tab-row input{width:20px;height:20px;margin:2px 0 0;accent-color:#7C4DFF;flex:none;}
+#${DIALOG_ID} .qts-tab-row span{min-width:0;display:block;}
+#${DIALOG_ID} .qts-tab-row strong,#${DIALOG_ID} .qts-tab-row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#${DIALOG_ID} .qts-tab-row strong{font-size:14px;font-weight:500;}
+#${DIALOG_ID} .qts-tab-row small{margin-top:2px;font-size:11px;color:#8E8E93;}
 #${DIALOG_ID} .qts-dialog-count{margin-top:16px;font-size:18px;color:#8E8E93;}
 #${DIALOG_ID} .qts-dialog-option{display:flex;align-items:center;gap:12px;margin:22px 0;font-size:17px;}
 #${DIALOG_ID} .qts-dialog-option input{width:24px;height:24px;margin:0;accent-color:#7C4DFF;}
-#${DIALOG_ID} .qts-dialog-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+#${DIALOG_ID} .qts-dialog-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;padding-top:12px;}
 #${DIALOG_ID} .qts-dialog-actions button{height:52px;border:0;border-radius:14px;font-size:18px;font-weight:600;}
 #${DIALOG_ID} .qts-dialog-cancel{background:#E5E5EA;color:#111;}
 #${DIALOG_ID} .qts-dialog-save{background:#7C4DFF;color:#fff;}
@@ -592,16 +621,7 @@
       lsSet("top", savedPosition.top)
       return
     }
-    if (singleClickTimer) {
-      clearTimeout(singleClickTimer)
-      singleClickTimer = null
-      showGroupPicker().catch(error => showToast(error?.message || "操作失败"))
-      return
-    }
-    singleClickTimer = setTimeout(() => {
-      singleClickTimer = null
-      showActionPicker().catch(error => showToast(error?.message || "操作失败"))
-    }, 260)
+    showSaveDialog().catch(error => showToast(error?.message || "操作失败"))
   }
 
   function setSavedVisual(saved) {
@@ -643,14 +663,6 @@
     picker.style.top = Math.round(top) + "px"
     picker.style.right = "auto"
     picker.style.bottom = "auto"
-  }
-
-  async function showActionPicker() {
-    await showSaveDialog("scope")
-  }
-
-  async function showGroupPicker() {
-    await showSaveDialog("group")
   }
 
   function escapeHtml(text) {
