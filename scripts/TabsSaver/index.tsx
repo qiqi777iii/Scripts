@@ -61,7 +61,6 @@ import {
   pullFromCloud,
   listCloudBackups,
   restoreCloudBackup,
-  getLocalCurrentVersion,
   getCloudCurrentVersion,
   deleteCloudBackup,
   getSyncMeta,
@@ -132,10 +131,17 @@ const GROUP_SEPARATOR_KEY = "tab.showGroupSeparators"
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.4.5"
+const APP_VERSION = "1.4.6"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "1.4.6",
+    date: "2026-07-12",
+    items: [
+      "WebDAV 恢复页移除多余的本机信息区域，只保留可恢复的 WebDAV 当前版本和历史备份。",
+    ],
+  },
   {
     version: "1.4.5",
     date: "2026-07-12",
@@ -1062,7 +1068,6 @@ function VersionHistoryView() {
   const dismiss = Navigation.useDismiss()
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [local, setLocal] = useState<CloudBackup | null>(null)
   const [cloudCurrent, setCloudCurrent] = useState<CloudBackup | null>(null)
   const [backups, setBackups] = useState<CloudBackup[]>([])
   const [undoInfo, setUndoInfo] = useState<RestoreUndoMeta | null>(null)
@@ -1073,11 +1078,9 @@ function VersionHistoryView() {
 
   async function reloadVersions() {
     setLoading(true)
-    const localVersion = await getLocalCurrentVersion()
     const currentVersion = await getCloudCurrentVersion()
     const history = await listCloudBackups(100)
     const undo = await getRestoreUndoInfo()
-    setLocal(localVersion)
     setCloudCurrent(currentVersion)
     setBackups(history)
     setUndoInfo(undo)
@@ -1349,18 +1352,6 @@ function VersionHistoryView() {
           <Text foregroundStyle="secondaryLabel">加载中…</Text>
         ) : (
           <>
-            {local ? (
-              <Section header={<Text>本机</Text>}>
-                <HStack>
-                  <Image systemName="iphone" foregroundStyle="systemBlue" font="title3" />
-                  <VStack alignment="leading" spacing={3}>
-                    <Text font="body">本机</Text>
-                    <Text font="footnote" foregroundStyle="secondaryLabel">{local.summary.label}</Text>
-                  </VStack>
-                </HStack>
-              </Section>
-            ) : null}
-
             <Section header={<Text>WebDAV 备份</Text>}>
               {cloudCurrent
                 ? versionRow(cloudCurrent, "externaldrive.badge.icloud", "systemBlue")
