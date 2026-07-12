@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 0.2.19
-// @description 在当前网页显示悬浮收藏按钮，可将页面保存到 Scripting「标签页收藏」的指定分组。
+// @version 0.2.20
+// @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并在保存成功后关闭标签页。
 // @match http://*/*
 // @match https://*/*
 // @run-at document-end
 // @grant Scripting.FileManager
+// @grant Scripting.tabs
+// @grant GM.closeTab
 // @grant GM.registerMenuCommand
 // ==/UserScript==
 
@@ -150,6 +152,83 @@
     if (exists) return false
     group.bookmarks.unshift({ id: uid(), title: pageTitle(), url, savedAt: now(), read: false })
     return true
+  }
+
+  function tabBookmark(tab) {
+    const url = normalizeUrl(tab?.url || "")
+    if (!/^https?:\/\//i.test(url)) return null
+    return {
+      id: uid(),
+      title: String(tab?.title || "").trim() || url,
+      url,
+      savedAt: now(),
+      read: false,
+    }
+  }
+
+  function addTabsToGroup(group, tabs) {
+    if (!Array.isArray(group.bookmarks)) group.bookmarks = []
+    const existing = new Set(group.bookmarks.map(bookmark => normalizeUrl(bookmark?.url || "")))
+    const additions = []
+    for (const tab of tabs) {
+      const bookmark = tabBookmark(tab)
+      if (!bookmark || existing.has(bookmark.url)) continue
+      existing.add(bookmark.url)
+      additions.push(bookmark)
+    }
+    group.bookmarks.unshift(...additions)
+    return additions.length
+  }
+
+  async function currentSafariTab() {
+    const current = await Scripting.tabs.getCurrent()
+    if (current) return current
+    return {
+      id: null,
+      url: location.href,
+      title: pageTitle(),
+      active: true,
+      index: 0,
+      windowId: 0,
+      pinned: false,
+    }
+  }
+
+  async function closeSavedTabs(tabs, currentId) {
+    const closable = tabs.filter(tab => Number.isInteger(tab?.id))
+    const current = closable.find(tab => tab.id === currentId)
+    const others = closable.filter(tab => tab.id !== currentId)
+    let failed = 0
+    for (const tab of [...others, ...(current ? [current] : [])]) {
+      try {
+        await GM.closeTab(tab.id)
+      } catch (_) {
+        failed += 1
+      }
+    }
+    return failed
+  }
+
+  async function saveTabsAndClose(mode) {
+    const current = await currentSafariTab()
+    let tabs
+    if (mode === "all") {
+      tabs = (await Scripting.tabs.query())
+        .filter(tab => /^https?:\/\//i.test(tab?.url || ""))
+        .sort((a, b) => a.windowId - b.windowId || a.index - b.index)
+    } else {
+      tabs = [current]
+    }
+    if (!tabs.length) throw new Error("没有可收藏的网页标签页")
+
+    const { file } = storePath()
+    const store = await loadStore(file)
+    const group = ensureDefaultGroup(store)
+    const added = addTabsToGroup(group, tabs)
+    if (added > 0) await saveStore(file, store)
+
+    const failed = await closeSavedTabs(tabs, current?.id)
+    if (failed > 0) throw new Error(`已收藏，${failed} 个标签页关闭失败`)
   }
 
   async function saveToDefault() {
@@ -393,7 +472,7 @@
     }
     singleClickTimer = setTimeout(() => {
       singleClickTimer = null
-      toggleCurrentPage().catch(error => showToast(error?.message || "操作失败"))
+      showActionPicker().catch(error => showToast(error?.message || "操作失败"))
     }, 260)
   }
 
@@ -436,6 +515,49 @@
     picker.style.top = Math.round(top) + "px"
     picker.style.right = "auto"
     picker.style.bottom = "auto"
+  }
+
+  async function showActionPicker() {
+    const current = document.getElementById(PICKER_ID)
+    if (current) {
+      current.remove()
+      return
+    }
+    const picker = document.createElement("div")
+    picker.id = PICKER_ID
+    picker.addEventListener("click", event => event.stopPropagation())
+
+    const title = document.createElement("div")
+    title.className = "qts-title"
+    title.textContent = "收藏成功后关闭标签页"
+    picker.appendChild(title)
+
+    const actions = [
+      { title: "收藏当前标签页", mode: "current" },
+      { title: "收藏全部标签页", mode: "all" },
+    ]
+    for (const action of actions) {
+      const row = document.createElement("button")
+      row.type = "button"
+      row.innerHTML = `<span>${action.title}</span><span class="qts-count">›</span>`
+      row.addEventListener("click", async event => {
+        event.preventDefault()
+        event.stopPropagation()
+        for (const item of picker.querySelectorAll("button")) item.disabled = true
+        try {
+          await saveTabsAndClose(action.mode)
+          picker.remove()
+        } catch (error) {
+          showToast(error?.message || "收藏失败")
+          for (const item of picker.querySelectorAll("button")) item.disabled = false
+        }
+      })
+      picker.appendChild(row)
+    }
+
+    document.documentElement.appendChild(picker)
+    positionPicker(picker)
+    setTimeout(() => document.addEventListener("click", closeGroupPicker, { once: true }), 0)
   }
 
   async function showGroupPicker() {
@@ -603,7 +725,7 @@
     button = document.createElement("button")
     button.id = BUTTON_ID
     button.type = "button"
-    button.setAttribute("aria-label", "收藏到 Tab")
+    button.setAttribute("aria-label", "收藏并关闭标签页")
     button.innerHTML = bookmarkSVG(false)
     button.addEventListener("pointerdown", onPointerDown)
     button.addEventListener("pointermove", onPointerMove)
