@@ -171,7 +171,7 @@ export function summarizeStore(store: Store): StoreSummary {
     bookmarks,
     favorites,
     updatedAt,
-    label: `${groups.length}组 · ${bookmarks}个 · 收藏${favorites}个 · 数据更新 ${formatDateTime(updatedAt)}`,
+    label: `${groups.length}组 · ${bookmarks}个 · 收藏${favorites}个`,
   }
 }
 function isPossibleAccidentalDelete(local: StoreSummary, remote: StoreSummary): boolean {
