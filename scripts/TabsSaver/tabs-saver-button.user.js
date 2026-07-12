@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 0.2.25
+// @version 0.2.26
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -39,9 +39,9 @@
   let startX = 0, startY = 0, startLeft = 0, startTop = 0
   let menuRegistered = false
   let positionSyncScheduled = false
-  let bodyObserver = null
   let rootObserver = null
-  let observedBody = null
+  let headObserver = null
+  let observedHead = null
   let healthCheckQueued = false
   let globalListenersInstalled = false
 
@@ -697,21 +697,17 @@
     if (globalListenersInstalled) return
     globalListenersInstalled = true
     window.addEventListener("resize", schedulePositionStabilize)
-    window.addEventListener("scroll", schedulePositionStabilize, { passive: true })
     window.visualViewport?.addEventListener("resize", schedulePositionStabilize)
     window.visualViewport?.addEventListener("scroll", schedulePositionStabilize)
     window.addEventListener("pageshow", () => { refreshSavedVisual(); scheduleHealthCheck() })
-    window.addEventListener("focus", () => { refreshSavedVisual(); scheduleHealthCheck() })
+    window.addEventListener("focus", refreshSavedVisual)
     window.addEventListener("load", scheduleHealthCheck, { once: true })
-    window.addEventListener("popstate", scheduleHealthCheck)
-    window.addEventListener("hashchange", scheduleHealthCheck)
-    document.addEventListener("readystatechange", scheduleHealthCheck)
     document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshSavedVisual(); scheduleHealthCheck() } })
   }
 
   function ensureButtonHealthy() {
     injectCSS()
-    startBodyGuard()
+    startDomGuard()
     const currentWrap = document.getElementById(WRAP_ID)
     const currentButton = document.getElementById(BUTTON_ID)
     if (!currentWrap || !currentButton || currentButton.parentElement !== currentWrap || !currentWrap.isConnected) {
@@ -735,39 +731,37 @@
     })
   }
 
-  function watchBody(body) {
-    if (!body || observedBody === body) return
-    observedBody = body
-    if (bodyObserver) bodyObserver.disconnect()
-    bodyObserver = new MutationObserver(mutations => {
+  function watchHead(head) {
+    if (!head || observedHead === head) return
+    observedHead = head
+    headObserver?.disconnect()
+    headObserver = new MutationObserver(mutations => {
       for (const mutation of mutations) {
         for (const node of mutation.removedNodes) {
-          if (node?.id === WRAP_ID || node?.querySelector?.(`#${WRAP_ID}`)) {
+          if (node?.id === "qiqi-tab-save-style") {
             scheduleHealthCheck()
             return
           }
         }
       }
     })
-    bodyObserver.observe(body, { childList: true })
+    headObserver.observe(head, { childList: true })
   }
 
-  function startBodyGuard() {
+  function startDomGuard() {
     const root = document.documentElement
     if (!root) return
-    watchBody(document.body)
+    watchHead(document.head)
     if (rootObserver) return
     rootObserver = new MutationObserver(mutations => {
       for (const mutation of mutations) {
         const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes]
         if (changedNodes.some(node =>
-          node === document.body ||
+          node === document.head ||
           node?.tagName === "HEAD" ||
-          node?.id === WRAP_ID ||
-          node?.id === "qiqi-tab-save-style" ||
-          node?.querySelector?.(`#${WRAP_ID}, #qiqi-tab-save-style`)
+          node?.id === WRAP_ID
         )) {
-          watchBody(document.body)
+          watchHead(document.head)
           scheduleHealthCheck()
           return
         }
@@ -804,7 +798,7 @@
     refreshSavedVisual()
     registerMenu()
     installPositionListeners()
-    startBodyGuard()
+    startDomGuard()
     schedulePositionStabilize()
   }
 
