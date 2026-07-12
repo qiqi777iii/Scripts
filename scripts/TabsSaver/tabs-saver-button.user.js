@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 0.2.26
+// @version 0.2.27
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -22,8 +22,9 @@
   const DEFAULT_GROUP_NAME = "默认"
   const BTN_SIZE = 30
 
-  // 新标签页打开脚本的容器 id：若存在，默认把收藏按钮排在它左侧。
-  const NEWTAB_ID = "__tb__"
+  // 悬浮翻页胶囊 id：默认把收藏按钮排在它左侧。
+  const PAGER_ID = "universal-pagination-floating-menu"
+  const LAYOUT_VERSION = "0.2.27"
   const NEIGHBOR_GAP = 4
   // 没有新标签按钮时（新用户/只装了 Tab）：居右边框 40px。
   const FALLBACK_RIGHT = 40
@@ -545,7 +546,7 @@
   function applyDefaultPosition() {
     if (!wrap) return
     const viewport = getViewportBox()
-    const neighbor = document.getElementById(NEWTAB_ID)
+    const neighbor = document.getElementById(PAGER_ID)
     if (neighbor) {
       const rect = neighbor.getBoundingClientRect()
       if (rect.width > 0 && rect.height > 0) {
@@ -759,7 +760,9 @@
         if (changedNodes.some(node =>
           node === document.head ||
           node?.tagName === "HEAD" ||
-          node?.id === WRAP_ID
+          node?.id === WRAP_ID ||
+          node?.id === PAGER_ID ||
+          node?.querySelector?.(`#${PAGER_ID}`)
         )) {
           watchHead(document.head)
           scheduleHealthCheck()
@@ -768,6 +771,13 @@
       }
     })
     rootObserver.observe(root, { childList: true })
+  }
+
+  function migrateDefaultPosition() {
+    if (lsGet("layoutVersion", "") === LAYOUT_VERSION) return
+    lsRemove("left")
+    lsRemove("top")
+    lsSet("layoutVersion", LAYOUT_VERSION)
   }
 
   function createButton() {
@@ -803,8 +813,10 @@
   }
 
   function boot() {
+    migrateDefaultPosition()
     createButton()
     scheduleHealthCheck()
+    ;[40, 120, 300, 700, 1500, 3000].forEach(delay => setTimeout(schedulePositionStabilize, delay))
   }
 
   boot()

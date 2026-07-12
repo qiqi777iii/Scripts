@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         关闭当前标签页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.1
+// @version      1.0.2
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/close-current-tab.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/close-current-tab.user.js
-// @description  在标签页收藏按钮左侧显示关闭按钮，点击即可关闭当前 Safari 标签页。
+// @description  在新标签页打开按钮左侧显示关闭按钮，点击即可关闭当前 Safari 标签页。
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-start
@@ -18,7 +18,7 @@
   const WRAP_ID = "qiqi-close-current-tab-toolbar"
   const BUTTON_ID = "qiqi-close-current-tab-button"
   const STYLE_ID = "qiqi-close-current-tab-style"
-  const TABS_SAVER_ID = "qiqi-tab-save-toolbar"
+  const NEWTAB_ID = "__tb__"
   const BTN_SIZE = 30
   const NEIGHBOR_GAP = 4
   const FALLBACK_RIGHT = 74
@@ -55,7 +55,7 @@
   function applyPosition() {
     if (!wrap) return
     const width = viewportWidth()
-    const neighbor = document.getElementById(TABS_SAVER_ID)
+    const neighbor = document.getElementById(NEWTAB_ID)
     let left = width - BTN_SIZE - FALLBACK_RIGHT
     if (neighbor) {
       const rect = neighbor.getBoundingClientRect()
@@ -125,8 +125,8 @@
       let neighborChanged = false
       for (const mutation of mutations) {
         for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
-          if (node?.id === WRAP_ID || node?.id === STYLE_ID || node?.id === TABS_SAVER_ID) needsHealthCheck = true
-          if (node?.id === TABS_SAVER_ID || node?.querySelector?.(`#${TABS_SAVER_ID}`)) neighborChanged = true
+          if (node?.id === WRAP_ID || node?.id === STYLE_ID || node?.id === NEWTAB_ID) needsHealthCheck = true
+          if (node?.id === NEWTAB_ID || node?.querySelector?.(`#${NEWTAB_ID}`)) neighborChanged = true
         }
       }
       if (needsHealthCheck && (!document.getElementById(WRAP_ID) || !document.getElementById(STYLE_ID))) createButton()
