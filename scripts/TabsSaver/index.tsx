@@ -132,10 +132,18 @@ const GROUP_SEPARATOR_KEY = "tab.showGroupSeparators"
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.4.3"
+const APP_VERSION = "1.4.4"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "1.4.4",
+    date: "2026-07-12",
+    items: [
+      "恢复页将当前本机简化为本机，并把最新上传的 WebDAV 当前版本合并到 WebDAV 备份列表。",
+      "最新上传版本会明确标注当前版本，历史快照仍可单独删除。",
+    ],
+  },
   {
     version: "1.4.3",
     date: "2026-07-12",
@@ -389,7 +397,7 @@ function formatBytes(bytes?: number): string {
 function backupDetailLabel(backup: CloudBackup): string {
   const size = formatBytes(backup.sizeBytes)
   const diff = backup.diffFromPrevious
-  if (!diff) return `${size} · 最早备份`
+  if (!diff) return size
   return `${size} · 新增 ${diff.added} · 删除 ${diff.removed}`
 }
 
@@ -1225,6 +1233,8 @@ function VersionHistoryView() {
               <Text font="footnote" foregroundStyle="secondaryLabel">{version.summary.label}</Text>
               {deletable ? (
                 <Text font="caption" foregroundStyle="tertiaryLabel">{backupDetailLabel(version)}</Text>
+              ) : version.current ? (
+                <Text font="caption" foregroundStyle="systemBlue">当前版本</Text>
               ) : null}
             </VStack>
           </HStack>
@@ -1333,26 +1343,26 @@ function VersionHistoryView() {
         ) : (
           <>
             {local ? (
-              <Section header={<Text>当前本机</Text>}>
+              <Section header={<Text>本机</Text>}>
                 <HStack>
                   <Image systemName="iphone" foregroundStyle="systemBlue" font="title3" />
                   <VStack alignment="leading" spacing={3}>
-                    <Text font="body">{local.name}</Text>
+                    <Text font="body">本机</Text>
                     <Text font="footnote" foregroundStyle="secondaryLabel">{local.summary.label}</Text>
                   </VStack>
                 </HStack>
               </Section>
             ) : null}
 
-            {cloudCurrent ? (
-              <Section header={<Text>当前 WebDAV</Text>}>
-                {versionRow(cloudCurrent, "externaldrive.badge.icloud", "systemBlue")}
-              </Section>
-            ) : (
-              <Section header={<Text>当前 WebDAV</Text>}>
-                <Text foregroundStyle="secondaryLabel">WebDAV 暂无当前数据</Text>
-              </Section>
-            )}
+            <Section
+              header={<Text>WebDAV 备份</Text>}
+              footer={<Text>{busy ? "正在处理…" : `当前版本 ${cloudCurrent ? 1 : 0} 个 · 历史备份 ${backups.length} 个`}</Text>}
+            >
+              {cloudCurrent
+                ? versionRow(cloudCurrent, "externaldrive.badge.icloud", "systemBlue")
+                : <Text foregroundStyle="secondaryLabel">WebDAV 暂无当前版本</Text>}
+              {backups.map((backup: CloudBackup) => versionRow(backup, "clock.arrow.circlepath", "systemOrange", true))}
+            </Section>
 
             {undoInfo ? (
               <Section
@@ -1367,12 +1377,6 @@ function VersionHistoryView() {
                 />
               </Section>
             ) : null}
-
-            <Section header={<Text>WebDAV 备份</Text>} footer={<Text>{busy ? "正在处理…" : `共 ${backups.length} 个备份`}</Text>}>
-              {backups.length === 0 ? (
-                <Text foregroundStyle="secondaryLabel">暂无 WebDAV 备份。上传新数据后会自动保留被替换的版本。</Text>
-              ) : backups.map((backup: CloudBackup) => versionRow(backup, "clock.arrow.circlepath", "systemOrange", true))}
-            </Section>
           </>
         )}
       </List>

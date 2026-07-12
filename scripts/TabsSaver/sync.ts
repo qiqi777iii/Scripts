@@ -142,6 +142,11 @@ function formatDateTime(ts: number | null | undefined): string {
   const d = new Date(ts)
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
+function formatDateTimeWithSeconds(ts: number | null | undefined): string {
+  if (!ts) return "未知时间"
+  const d = new Date(ts)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 function backupName(date = new Date()): string {
   return `store-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}-${date.getMilliseconds()}.json`
 }
@@ -552,7 +557,7 @@ export async function getCloudCurrentVersion(): Promise<CloudBackup | null> {
     if (!remote) return null
     return {
       path: storeUrl(),
-      name: "当前 WebDAV",
+      name: formatDateTimeWithSeconds(getSyncMeta().lastSyncAt ?? remote.updatedAt),
       summary: summarizeStore(remote),
       source: "webdav",
       current: true,
