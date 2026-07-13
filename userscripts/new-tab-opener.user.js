@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.1.0
+// @version      1.1.1
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -46,6 +46,8 @@
     let genericLinkPointerDownX = 0;
     let genericLinkPointerDownY = 0;
     let genericLinkPointerDownHref = '';
+    let backgroundToastTimer = null;
+    let backgroundToastRemoveTimer = null;
     const GENERIC_LINK_MOVE_TOLERANCE = 12;
 
     function getVal(key, def) {
@@ -280,6 +282,29 @@
     let rule34VideoPointerDownY = 0;
     let rule34VideoPointerDownHref = '';
 
+    function showBackgroundToast() {
+        const id = '__tb_background_toast__';
+        let toast = document.getElementById(id);
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = id;
+            toast.textContent = '后台打开';
+            toast.setAttribute('role', 'status');
+            toast.setAttribute('aria-live', 'polite');
+            toast.style.cssText = 'position:fixed;left:50%;bottom:96px;z-index:2147483647;max-width:calc(100vw - 32px);box-sizing:border-box;padding:8px 14px;border-radius:10px;background:rgba(28,28,30,.88);color:#fff;font:600 14px/20px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;letter-spacing:.01em;text-align:center;white-space:nowrap;pointer-events:none;-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);box-shadow:0 2px 10px rgba(0,0,0,.16);opacity:0;transform:translate(-50%,6px);transition:opacity .12s ease,transform .12s ease;';
+            (document.body || document.documentElement).appendChild(toast);
+        }
+        clearTimeout(backgroundToastTimer);
+        clearTimeout(backgroundToastRemoveTimer);
+        toast.style.opacity = '1';
+        toast.style.transform = 'translate(-50%,0)';
+        backgroundToastTimer = setTimeout(function () {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translate(-50%,6px)';
+            backgroundToastRemoveTimer = setTimeout(function () { toast.remove(); }, 140);
+        }, 1000);
+    }
+
     function openLinkWithAnchor(href) {
         const link = document.createElement('a');
         link.href = href;
@@ -292,7 +317,10 @@
         link.style.height = '1px';
         link.style.opacity = '0';
         (document.body || document.documentElement).appendChild(link);
-        try { link.click(); } catch (_) {}
+        try {
+            link.click();
+            showBackgroundToast();
+        } catch (_) {}
         setTimeout(function () { link.remove(); }, 0);
     }
 
@@ -301,8 +329,10 @@
         try {
             if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
                 const task = GM.openInTab(href, { active: false });
-                if (task && typeof task.catch === 'function') {
-                    task.catch(function () { openLinkWithAnchor(href); });
+                if (task && typeof task.then === 'function') {
+                    task.then(showBackgroundToast).catch(function () { openLinkWithAnchor(href); });
+                } else {
+                    showBackgroundToast();
                 }
                 return;
             }
