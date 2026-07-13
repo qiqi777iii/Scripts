@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.1.2
+// @version      1.1.3
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -17,19 +17,18 @@
     const KEY = '__tb_';
     const BTN_SIZE = 35;
     const BOTTOM_GAP = 40;
-    const LINK_PAGER_GAP = 4;
+    const LINK_PAGER_GAP = 0;
     const PAGER_RIGHT_GAP = 16;
     const PAGER_HEIGHT = 35;
     const DEFAULT_BOTTOM = BOTTOM_GAP + (PAGER_HEIGHT - BTN_SIZE) / 2;
     const FALLBACK_PAGER_WIDTH = 175;
     const DEFAULT_RIGHT = PAGER_RIGHT_GAP + FALLBACK_PAGER_WIDTH + LINK_PAGER_GAP;
-    const CURRENT_LAYOUT_VERSION = '1.1.0';
-
-    const COLOR_ON = '#0A84FF';
-    const COLOR_OFF = 'rgba(28,28,30,.82)';
+    const CURRENT_LAYOUT_VERSION = '1.1.3-toolbar-v3';
+    const GROUP_DRAG_EVENT = 'qiqi-floating-toolbar-group-drag';
+    const GROUP_LEFT_WIDTH = 35;
 
     let enabled = getVal('newTabEnabled', true);
-    let toolbar, linkBtn, observer, bodyObserver, toolbarEnsureTimer, neighborResizeObserver, observedNeighbor;
+    let toolbar, linkBtn, observer, bodyObserver, toolbarEnsureTimer, neighborResizeObserver, neighborMutationObserver, observedNeighbor;
     let menuRegistered = false;
     let listenersInstalled = false;
     let historyHooked = false;
@@ -39,6 +38,7 @@
     let dragging = false;
     let moved = false;
     let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    let dragPager = null, startPagerLeft = 0, startPagerTop = 0;
     let lastOpenedHref = '';
     let lastOpenedAt = 0;
     let genericLinkPointerDownX = 0;
@@ -344,20 +344,19 @@
         style.id = '__tb_style__';
         style.textContent = `
 #__tb__{position:fixed;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top,right,bottom,transform;}
-#__tb_btn__{width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,background .2s,color .2s,box-shadow .2s;}
-#__tb_btn__[data-enabled="true"]{background:rgba(0,122,255,.14);color:#0A84FF;box-shadow:inset 0 0 0 .5px rgba(0,122,255,.26);}
+#__tb_btn__{width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:999px 0 0 999px;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity .2s,background .2s,color .2s,box-shadow .2s;}
+#__tb_btn__[data-enabled="true"]{background:rgba(242,242,247,.92);color:#0A84FF;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);}
 #__tb_btn__ svg{pointer-events:none;stroke:currentColor;}
-#__tb_btn__:active{transform:scale(.96);opacity:.94;background:rgba(229,229,234,.96);}
-#__tb_btn__[data-enabled="true"]:active{background:rgba(0,122,255,.20);}
-@media (prefers-color-scheme: dark){#__tb_btn__{background:rgba(44,44,46,.82);color:rgba(255,255,255,.88);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14);}#__tb_btn__[data-enabled="true"]{background:rgba(10,132,255,.26);color:#64D2FF;box-shadow:inset 0 0 0 .5px rgba(100,210,255,.28);}#__tb_btn__:active{background:rgba(58,58,60,.86);}#__tb_btn__[data-enabled="true"]:active{background:rgba(10,132,255,.34);}}`;
+#__tb_btn__:active{transform:none;opacity:.94;background:rgba(229,229,234,.96);}
+#__tb_btn__[data-enabled="true"]:active{background:rgba(229,229,234,.96);}
+@media (prefers-color-scheme: dark){#__tb_btn__{background:rgba(44,44,46,.82);color:rgba(255,255,255,.88);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.16);}#__tb_btn__[data-enabled="true"]{background:rgba(44,44,46,.82);color:#64D2FF;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.16);}#__tb_btn__:active,#__tb_btn__[data-enabled="true"]:active{background:rgba(58,58,60,.92);}}`;
         const parent = document.head || document.documentElement || document.body;
         if (parent) parent.appendChild(style);
     }
 
-    // SVG 链接图标：保留同一图标，开关状态只通过按钮底色和 currentColor 区分
+    // SVG 链接图标：开关状态只通过 currentColor 区分，保持组合栏背景一致。
     function linkSVG(on) {
-        const color = on ? COLOR_ON : COLOR_OFF;
-        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" fill="none"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" fill="none"></path></svg>';
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" fill="none"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" fill="none"></path></svg>';
     }
 
     function updateBtn() {
@@ -387,6 +386,23 @@
         };
     }
 
+    function clampPagerGroupPos(left, top, pager) {
+        const viewport = getViewportBox();
+        const width = Math.max(pager?.offsetWidth || pager?.getBoundingClientRect?.().width || 0, 35);
+        const height = Math.max(pager?.offsetHeight || pager?.getBoundingClientRect?.().height || 0, 35);
+        const maxLeft = Math.max(0, viewport.width - width);
+        const minLeft = Math.min(GROUP_LEFT_WIDTH, maxLeft);
+        return {
+            left: Math.max(minLeft, Math.min(left, maxLeft)),
+            top: Math.max(0, Math.min(top, viewport.height - height - BOTTOM_GAP)),
+        };
+    }
+
+    function dispatchGroupDrag(pager, phase, left, top) {
+        if (!pager) return;
+        pager.dispatchEvent(new CustomEvent(GROUP_DRAG_EVENT, { detail: { phase, left, top } }));
+    }
+
     function applySavedPosition() {
         if (!toolbar || !savedPosition) return false;
         const pos = clampPos(savedPosition.left, savedPosition.top);
@@ -409,25 +425,32 @@
         };
     }
 
-    // 标签页收藏按钮 id：默认把新标签页按钮排在其左侧。
-    const TABS_SAVER_ID = 'qiqi-tab-save-toolbar';
+    // 悬浮翻页栏 id：链接按钮直接贴在它左侧，形成一条视觉组合栏。
+    const PAGER_ID = 'universal-pagination-floating-menu';
 
     function observeNeighbor(neighbor) {
         if (observedNeighbor === neighbor) return;
         neighborResizeObserver?.disconnect();
+        neighborMutationObserver?.disconnect();
         observedNeighbor = neighbor || null;
-        if (!neighbor || typeof ResizeObserver !== 'function') return;
-        neighborResizeObserver = new ResizeObserver(schedulePositionStabilize);
-        neighborResizeObserver.observe(neighbor);
+        if (!neighbor) return;
+        if (typeof ResizeObserver === 'function') {
+            neighborResizeObserver = new ResizeObserver(schedulePositionStabilize);
+            neighborResizeObserver.observe(neighbor);
+        }
+        if (typeof MutationObserver === 'function') {
+            neighborMutationObserver = new MutationObserver(schedulePositionStabilize);
+            neighborMutationObserver.observe(neighbor, { attributes: true, attributeFilter: ['style', 'data-pagination', 'data-hidden'] });
+        }
     }
 
-    // 默认位置：横向优先读取标签页收藏按钮的实时 rect，把按钮排在其左侧；
+    // 默认位置：横向读取悬浮翻页栏的实时 rect，把链接按钮无缝贴在其左侧；
     // 纵向始终使用 fixed bottom，不读取 rect.top，避免 iOS 过度滑动/地址栏伸缩时被临时 top 值带偏。
-    // 若收藏按钮尚未创建，则使用保守 right/bottom 兜底。
+    // 若翻页栏尚未创建，则使用保守 right/bottom 兜底。
     function applyDefaultPosition() {
         if (!toolbar) return;
         const viewport = getViewportBox();
-        const neighbor = document.getElementById(TABS_SAVER_ID);
+        const neighbor = document.getElementById(PAGER_ID);
         observeNeighbor(neighbor);
         // 纵向用 CSS bottom 锚定贴底（不换算绝对 top），避免 iOS Safari 地址栏伸缩时
         // viewport.height 取到偏大的布局视口高度，把按钮顶到屏幕中间。
@@ -437,9 +460,15 @@
             if (rect.width > 0 && rect.height > 0) {
                 const pos = clampPos(rect.left - LINK_PAGER_GAP - BTN_SIZE, 0);
                 toolbar.style.left = pos.left + 'px';
-                toolbar.style.bottom = DEFAULT_BOTTOM + 'px';
                 toolbar.style.right = 'auto';
-                toolbar.style.top = 'auto';
+                const usesBottom = neighbor.style.bottom && neighbor.style.bottom !== 'auto' && (!neighbor.style.top || neighbor.style.top === 'auto');
+                if (usesBottom) {
+                    toolbar.style.bottom = neighbor.style.bottom;
+                    toolbar.style.top = 'auto';
+                } else {
+                    toolbar.style.top = rect.top + 'px';
+                    toolbar.style.bottom = 'auto';
+                }
                 return;
             }
         }
@@ -450,8 +479,15 @@
     }
 
     function syncDefaultPosition() {
-        if (!toolbar || savedPosition || dragging) return;
-        applyDefaultPosition();
+        if (!toolbar || dragging) return;
+        if (document.getElementById(PAGER_ID)) {
+            savedPosition = null;
+            applyDefaultPosition();
+        } else if (savedPosition) {
+            applySavedPosition();
+        } else {
+            applyDefaultPosition();
+        }
     }
 
     // 纯 fixed 定位：拖动后保存自定义位置；未拖动时横向贴在悬浮翻页左侧，纵向固定 bottom 防止过度滑动错位。
@@ -499,9 +535,15 @@
         isolateFloatingUi(toolbar);
         parent.appendChild(toolbar);
 
+        const pager = document.getElementById(PAGER_ID);
         const savedLeft = getVal('tbLeft', null);
         const savedTop = getVal('tbTop', null);
-        if (savedLeft !== null && savedTop !== null) {
+        if (pager) {
+            savedPosition = null;
+            removeVal('tbLeft');
+            removeVal('tbTop');
+            applyDefaultPosition();
+        } else if (savedLeft !== null && savedTop !== null) {
             savedPosition = clampPos(savedLeft, savedTop);
             applySavedPosition();
         } else {
@@ -527,6 +569,12 @@
         const rect = toolbar.getBoundingClientRect();
         startLeft = rect.left;
         startTop = rect.top;
+        dragPager = document.getElementById(PAGER_ID);
+        if (dragPager) {
+            const pagerRect = dragPager.getBoundingClientRect();
+            startPagerLeft = pagerRect.left;
+            startPagerTop = pagerRect.top;
+        }
         // 纯 fixed：直接用 rect，不加 offset。
         toolbar.style.left = rect.left + 'px';
         toolbar.style.top = rect.top + 'px';
@@ -544,10 +592,16 @@
         if (!moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
         moved = true;
 
-        // 纯 fixed：不叠加 offset。
-        const pos = clampPos(startLeft + dx, startTop + dy);
-        toolbar.style.left = pos.left + 'px';
-        toolbar.style.top = pos.top + 'px';
+        if (dragPager) {
+            const pos = clampPagerGroupPos(startPagerLeft + dx, startPagerTop + dy, dragPager);
+            dispatchGroupDrag(dragPager, 'move', pos.left, pos.top);
+            applyDefaultPosition();
+        } else {
+            // 翻页脚本未加载时，仍允许链接按钮独立拖动。
+            const pos = clampPos(startLeft + dx, startTop + dy);
+            toolbar.style.left = pos.left + 'px';
+            toolbar.style.top = pos.top + 'px';
+        }
     }
 
     function onPointerUp(e) {
@@ -557,15 +611,22 @@
         dragging = false;
         linkBtn.releasePointerCapture?.(e.pointerId);
 
-        if (moved) {
-            // 纯 fixed：保存值直接用 style.left/top，不减 offset。
+        if (moved && dragPager) {
+            const rect = dragPager.getBoundingClientRect();
+            dispatchGroupDrag(dragPager, e.type === 'pointercancel' ? 'cancel' : 'end', rect.left, rect.top);
+            savedPosition = null;
+            removeVal('tbLeft');
+            removeVal('tbTop');
+        } else if (moved) {
+            // 翻页脚本未加载时保存链接按钮的独立位置。
             savedPosition = clampPos(parseInt(toolbar.style.left, 10) || 0, parseInt(toolbar.style.top, 10) || 0);
             setVal('tbLeft', savedPosition.left);
             setVal('tbTop', savedPosition.top);
-        } else {
+        } else if (e.type !== 'pointercancel') {
             enabled = !enabled;
             refresh();
         }
+        dragPager = null;
     }
 
     function isToolbarHealthy() {
@@ -614,7 +675,10 @@
         nextFrame(function () {
             positionSyncScheduled = false;
             if (!toolbar || dragging) return;
-            if (savedPosition) applySavedPosition();
+            if (document.getElementById(PAGER_ID)) {
+                savedPosition = null;
+                applyDefaultPosition();
+            } else if (savedPosition) applySavedPosition();
             else applyDefaultPosition();
             // iOS Safari 偶发 fixed 图层滚动后不重绘；重写 transform 触发合成层刷新。
             toolbar.style.transform = 'translate3d(0,0,0)';

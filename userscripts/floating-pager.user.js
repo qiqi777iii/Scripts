@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.71
+// @version      1.0.72
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @description  自动识别页面的上一页和下一页，并提供关闭标签页、刷新及可拖动的悬浮翻页按钮。
@@ -21,15 +21,18 @@
   "use strict";
 
   const SCRIPT_ID = "universal-pagination-floating-menu";
-  const POS_KEY = `${SCRIPT_ID}:position:v12`;
+  const POS_KEY = `${SCRIPT_ID}:position:v13-group`;
   const SAFE_BOTTOM_GAP = 40;
   const PAGER_ITEM_SIZE = 35;
   const PAGE_MIN_WIDTH = 35;
   const FALLBACK_PAGER_WIDTH = PAGER_ITEM_SIZE * 3 + PAGE_MIN_WIDTH;
-  const REFRESH_ICON_SIZE = 19;
+  const REFRESH_ICON_SIZE = 21;
   const DEFAULT_RIGHT_GAP = 16;
   const NODESEEK_BOTTOM_EXTRA = 0;
   const ENABLE_KEY = `${SCRIPT_ID}:enabled`;
+  const BOUND_LINK_ID = "__tb__";
+  const BOUND_CONTROL_SIZE = 35;
+  const GROUP_DRAG_EVENT = "qiqi-floating-toolbar-group-drag";
   const STATE = {
     enabled: true,
     prev: null,
@@ -1403,6 +1406,28 @@
     return SAFE_BOTTOM_GAP + (isNodeSeek() ? NODESEEK_BOTTOM_EXTRA : 0);
   }
 
+  function positionBoundControl(control, left, box, rect) {
+    if (!control) return;
+    control.style.left = `${Math.max(0, left)}px`;
+    control.style.right = "auto";
+    const usesBottom = box.style.bottom && box.style.bottom !== "auto" && (!box.style.top || box.style.top === "auto");
+    if (usesBottom) {
+      control.style.bottom = box.style.bottom;
+      control.style.top = "auto";
+    } else {
+      control.style.top = `${rect.top}px`;
+      control.style.bottom = "auto";
+    }
+    control.style.transform = "translate3d(0,0,0)";
+  }
+
+  function syncBoundLink(box) {
+    if (!box?.isConnected) return;
+    const rect = box.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return;
+    positionBoundControl(document.getElementById(BOUND_LINK_ID), rect.left - BOUND_CONTROL_SIZE, box, rect);
+  }
+
   function applyDefaultMenuPosition(box) {
     if (!box) return;
     // 用 CSS right/bottom 锚定贴边，而不是换算成绝对 top/left。
@@ -1413,6 +1438,7 @@
     box.style.bottom = `${getDefaultBottomGap()}px`;
     box.style.left = "auto";
     box.style.top = "auto";
+    syncBoundLink(box);
   }
 
   function applySavedMenuPosition(box) {
@@ -1423,6 +1449,7 @@
     box.style.top = `${pos.top}px`;
     box.style.right = "auto";
     box.style.bottom = "auto";
+    syncBoundLink(box);
     return true;
   }
 
@@ -1430,8 +1457,11 @@
     const viewport = getViewportBox();
     const width = Math.max(box?.offsetWidth || 0, 34);
     const height = Math.max(box?.offsetHeight || 0, 34);
+    const maxLeft = Math.max(0, viewport.width - width);
+    const hasBoundLink = document.getElementById(BOUND_LINK_ID);
+    const minLeft = hasBoundLink ? Math.min(BOUND_CONTROL_SIZE, maxLeft) : 0;
     return {
-      left: Math.max(0, Math.min(left, viewport.width - width)),
+      left: Math.max(minLeft, Math.min(left, maxLeft)),
       top: Math.max(0, Math.min(top, viewport.height - height - SAFE_BOTTOM_GAP)),
     };
   }
@@ -1470,6 +1500,9 @@
         overflow: hidden;
         user-select: none;
         touch-action: manipulation;
+      }
+      html:has(#__tb__) #${SCRIPT_ID} {
+        border-radius: 0 999px 999px 0;
       }
       @media (prefers-color-scheme: dark) {
         #${SCRIPT_ID} {
@@ -1523,10 +1556,15 @@
         transition: background .18s ease, transform .12s ease, opacity .18s ease;
       }
       #${SCRIPT_ID} button svg {
-        width: 19px;
-        height: 19px;
+        width: 21px;
+        height: 21px;
         display: block;
         pointer-events: none;
+      }
+      #${SCRIPT_ID} .prev svg,
+      #${SCRIPT_ID} .next svg {
+        width: 22px;
+        height: 22px;
       }
       #${SCRIPT_ID} button:active {
         background: var(--upfm-active);
@@ -1575,7 +1613,7 @@
       #${SCRIPT_ID} .page {
         min-width: ${PAGE_MIN_WIDTH}px;
         cursor: grab;
-        font-size: 11px;
+        font-size: 15px;
         font-weight: 600;
         opacity: .78;
         letter-spacing: .02em;
@@ -1688,6 +1726,26 @@
     `;
     isolateFloatingUi(box);
     document.documentElement.appendChild(box);
+    box.addEventListener(GROUP_DRAG_EVENT, (event) => {
+      const detail = event.detail || {};
+      const left = Number(detail.left);
+      const top = Number(detail.top);
+      if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+      const pos = clampSavedMenuPosition(left, top, box);
+      box.style.left = `${pos.left}px`;
+      box.style.top = `${pos.top}px`;
+      box.style.right = "auto";
+      box.style.bottom = "auto";
+      STATE.savedPosition = pos;
+      const finished = detail.phase === "end" || detail.phase === "cancel";
+      STATE.dragging = !finished;
+      box.classList.toggle("dragging", !finished);
+      syncBoundLink(box);
+      if (finished) {
+        STATE.positionRevision += 1;
+        gmSet(POS_KEY, STATE.savedPosition).catch(() => {});
+      }
+    });
     applyDefaultMenuPosition(box);
 
     bindActionButton(box.querySelector(".prev"), () => navigateDirection("prev"));
@@ -1737,6 +1795,7 @@
       box.style.top = `${pos.top}px`;
       box.style.right = "auto";
       box.style.bottom = "auto";
+      syncBoundLink(box);
     };
 
     const savePosition = async () => {
@@ -1788,6 +1847,7 @@
       if (moved) {
         STATE.positionRevision += 1;
         savePosition();
+        syncBoundLink(box);
       }
       else promptJumpPage();
     };
@@ -1802,6 +1862,7 @@
       if (moved) {
         STATE.positionRevision += 1;
         savePosition();
+        syncBoundLink(box);
       }
     });
   }
@@ -1841,6 +1902,7 @@
       } else {
         applyDefaultMenuPosition(box);
       }
+      syncBoundLink(box);
     });
   }
 

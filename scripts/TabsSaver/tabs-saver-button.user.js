@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 0.2.33
+// @version 0.2.34
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -22,12 +22,11 @@
   const DEFAULT_GROUP_NAME = "默认"
   const BTN_SIZE = 35
 
-  // 悬浮翻页胶囊 id：默认把收藏按钮排在它左侧。
-  const PAGER_ID = "universal-pagination-floating-menu"
-  const LAYOUT_VERSION = "0.2.33"
-  const NEIGHBOR_GAP = 4
-  // 没有检测到翻页胶囊时，仍按完整 175px 胶囊预留位置，防止加载时序造成重叠。
-  const FALLBACK_RIGHT = 195
+  // 收藏按钮使用独立位置系统；默认位置与右侧组合栏保持 8px 间距，但之后互不跟随。
+  const LINK_BUTTON_ID = "__tb__"
+  const INITIAL_GAP = 8
+  const LAYOUT_VERSION = "0.2.34-toolbar-v4"
+  const FALLBACK_RIGHT = 234
   const BOTTOM_GAP = 40
 
   const LS_KEY = "qiqi_tab_"
@@ -45,8 +44,6 @@
   let observedHead = null
   let healthCheckQueued = false
   let globalListenersInstalled = false
-  let neighborResizeObserver = null
-  let observedNeighbor = null
 
   function lsGet(key, def) {
     try {
@@ -464,7 +461,7 @@
 
   function bookmarkSVG(saved) {
     const fill = saved ? "currentColor" : "none"
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="19" height="19" fill="${fill}" stroke="currentColor" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>`
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="21" height="21" fill="${fill}" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>`
   }
 
   function injectCSS() {
@@ -545,28 +542,24 @@
     return true
   }
 
-  function observeNeighbor(neighbor) {
-    if (observedNeighbor === neighbor) return
-    neighborResizeObserver?.disconnect()
-    observedNeighbor = neighbor || null
-    if (!neighbor || typeof ResizeObserver !== "function") return
-    neighborResizeObserver = new ResizeObserver(schedulePositionStabilize)
-    neighborResizeObserver.observe(neighbor)
-  }
-
   function applyDefaultPosition() {
     if (!wrap) return
     const viewport = getViewportBox()
-    const neighbor = document.getElementById(PAGER_ID)
-    observeNeighbor(neighbor)
-    if (neighbor) {
-      const rect = neighbor.getBoundingClientRect()
+    const link = document.getElementById(LINK_BUTTON_ID)
+    if (link) {
+      const rect = link.getBoundingClientRect()
       if (rect.width > 0 && rect.height > 0) {
-        const left = Math.max(0, Math.min(rect.left - NEIGHBOR_GAP - BTN_SIZE, viewport.width - BTN_SIZE))
-        wrap.style.left = left + "px"
-        wrap.style.bottom = BOTTOM_GAP + "px"
+        const pos = clampPos(rect.left - INITIAL_GAP - BTN_SIZE, rect.top)
+        wrap.style.left = pos.left + "px"
         wrap.style.right = "auto"
-        wrap.style.top = "auto"
+        const usesBottom = link.style.bottom && link.style.bottom !== "auto" && (!link.style.top || link.style.top === "auto")
+        if (usesBottom) {
+          wrap.style.bottom = link.style.bottom
+          wrap.style.top = "auto"
+        } else {
+          wrap.style.top = pos.top + "px"
+          wrap.style.bottom = "auto"
+        }
         return
       }
     }
@@ -643,6 +636,7 @@
       lsSet("top", savedPosition.top)
       return
     }
+    if (e.type === "pointercancel") return
     const action = button?.dataset.saved === "true"
       ? removeCurrentPage()
       : showSaveDialog()
@@ -772,9 +766,7 @@
         if (changedNodes.some(node =>
           node === document.head ||
           node?.tagName === "HEAD" ||
-          node?.id === WRAP_ID ||
-          node?.id === PAGER_ID ||
-          node?.querySelector?.(`#${PAGER_ID}`)
+          node?.id === WRAP_ID
         )) {
           watchHead(document.head)
           scheduleHealthCheck()
