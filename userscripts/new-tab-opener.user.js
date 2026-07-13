@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.1.3
+// @version      1.1.4
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -302,6 +302,14 @@
         return Math.abs(p.x - genericLinkPointerDownX) > GENERIC_LINK_MOVE_TOLERANCE || Math.abs(p.y - genericLinkPointerDownY) > GENERIC_LINK_MOVE_TOLERANCE;
     }
 
+    function isMissAvPreviewActivation(target, a) {
+        if (!/(^|\.)missav\./i.test(location.hostname) || !a) return false;
+        const card = target?.closest?.('.thumbnail');
+        if (!card || !(card.getAttribute('@click') || '').includes('clickPreview')) return false;
+        const preview = a.querySelector?.('video.preview');
+        return Boolean(preview && preview.classList.contains('hidden'));
+    }
+
     function shouldOpenNewTab(a) {
         if (!enabled || !a) return false;
         if (isPaginationLink(a)) return false;
@@ -312,6 +320,9 @@
     function handleLinkOpen(e) {
         if (toolbar?.contains(e.target)) return;
         const a = findLinkTarget(e.target);
+        // MissAV 手机端第一次点封面由站点自身 clickPreview 接管并播放预览；
+        // 预览已显示后的再次点击仍按后台新标签页规则打开详情。
+        if (isMissAvPreviewActivation(e.target, a)) return;
         if (!shouldOpenNewTab(a)) return;
 
         // 通用链接只在 click 阶段处理；pointerup/touchend 过早处理会把滑动列表的抬手误判为点击。
