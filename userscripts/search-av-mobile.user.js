@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Search-av-mobile
+// @name         番号快速搜索
 // @namespace    https://github.com/qiqi777iii/Scripts
 // @version      0.24.5.8
 // @description  识别并标记网页中的番号，提供常用网站快捷搜索。
