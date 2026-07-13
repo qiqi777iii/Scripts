@@ -130,12 +130,12 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "1.5.14"
+const APP_VERSION = "2.0"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = { version: string; date: string; items: string[] }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
-    version: "1.5.14",
+    version: "2.0",
     date: "2026-07-13",
     items: [
       "回收站保留期限调整为 3 天、7 天、15 天和永久。",
