@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.0.13
+// @version      2.0.14
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @description  自动识别页面的上一页和下一页，并提供关闭、新建 Safari 起始页、刷新及可拖动的悬浮翻页按钮。
@@ -42,6 +42,8 @@
     currentPage: "?",
     lastUrl: location.href,
     observer: null,
+    pagerObserver: null,
+    observedPagerRoot: null,
     fallbackTimer: null,
     fallbackAttempt: 0,
     updateTimer: null,
@@ -51,6 +53,7 @@
     dragging: false,
     initialized: false,
     settingsLoaded: false,
+    numericPager: null,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -105,12 +108,18 @@
 
   function disabled(el) {
     if (!el) return true;
+    const anchorWithoutHref = el.tagName === "A" && !el.getAttribute("href") && !el.onclick;
     return Boolean(
       el.disabled ||
       el.getAttribute("aria-disabled") === "true" ||
       /(^|\s)(disabled|disable|unavailable|inactive)(\s|$)/i.test(el.className || "") ||
-      (el.tagName === "A" && !el.getAttribute("href") && !el.onclick)
+      (anchorWithoutHref && !el.hasAttribute("data-page") && !paginationContainer(el))
     );
+  }
+
+  function labelledByText(el) {
+    const ids = String(el?.getAttribute?.("aria-labelledby") || "").trim().split(/\s+/).filter(Boolean);
+    return ids.map((id) => document.getElementById(id)?.textContent || "").join(" ");
   }
 
   function normalizeText(el) {
@@ -118,10 +127,14 @@
       el.innerText,
       el.textContent,
       el.getAttribute("aria-label"),
+      labelledByText(el),
       el.getAttribute("title"),
       el.getAttribute("rel"),
       el.getAttribute("class"),
       el.getAttribute("id"),
+      el.getAttribute("data-page"),
+      el.querySelector?.("img[alt]")?.getAttribute("alt"),
+      el.querySelector?.("svg title")?.textContent,
     ]
       .filter(Boolean)
       .join(" ")
@@ -129,8 +142,10 @@
       .trim();
   }
 
+  const PAGINATION_CONTAINER_SELECTOR = '.pagination, .pager, .pages, .page-list, .pagebar, .page-numbers, [class*="pagination" i], [class*="pager" i], [class*="page-list" i], [class*="pagebar" i], [class*="pages" i], [id*="pagination" i], [id*="pager" i], [role="navigation"][aria-label*="page" i], [role="navigation"][aria-label*="分页"], [aria-label="pagination" i], [aria-label*="page navigation" i]';
+
   function paginationContainer(el) {
-    return el?.closest?.('.pagination, .pager, .pages, .page-numbers, [class*=pagination], [class*=pager], [class*=page-numbers], [id*=pagination], [id*=pager], [role="navigation"][aria-label*="page" i], [role="navigation"][aria-label*="分页"]') || null;
+    return el?.closest?.(PAGINATION_CONTAINER_SELECTOR) || null;
   }
 
   function deniedPaginationCandidate(el) {
@@ -170,69 +185,194 @@
     return Array.from(new Set(list.filter(Boolean)));
   }
 
+  function explicitCurrentElement(root) {
+    return root?.querySelector?.('[aria-current="page"], [class~="current"], [class~="active"], [class~="selected"], .page-numbers.current, .page-numbers.active') || null;
+  }
+
+  function numericControlValue(el) {
+    if (!el) return "";
+    const dataValue = String(el.getAttribute?.("data-page") || el.getAttribute?.("data-page-number") || "").trim();
+    if (/^0*\d{1,5}$/.test(dataValue)) return String(parseInt(dataValue, 10));
+    const text = numericText(el);
+    if (text) return text;
+    const href = el.href || el.getAttribute?.("href") || "";
+    return href ? pageFromUrl(href) : "";
+  }
+
+  function hasPageUrlEvidence(el, page) {
+    const href = el?.href || el?.getAttribute?.("href") || "";
+    if (!href || !page) return false;
+    try {
+      const url = new URL(href, location.href);
+      if (!/^https?:$/i.test(url.protocol) || url.origin !== location.origin) return false;
+      if (["page", "p", "paged", "pg", "pn", "pageNo", "pageNumber"].some((key) => url.searchParams.get(key) === String(page))) return true;
+      if (new RegExp(`(?:page|p|pg|list)[/_-]?0*${page}(?:/|$|\\.html?$)`, "i").test(url.pathname)) return true;
+      return new RegExp(`/0*${page}/?$`).test(url.pathname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function numericPagerRoot(el) {
+    const explicit = paginationContainer(el);
+    if (explicit) return explicit;
+    const list = el?.closest?.("ul, ol");
+    if (list) return list;
+    const parent = el?.parentElement;
+    if (parent?.tagName === "LI" && parent.parentElement) return parent.parentElement;
+    return parent;
+  }
+
+  function detectNumericPager() {
+    const explicitRoots = $$(PAGINATION_CONTAINER_SELECTOR);
+    const controls = uniqueElements([
+      ...$$('a[href], button, [role="button"], [data-page], [data-page-number], [aria-current="page"], [class~="current"], [class~="active"], [class~="selected"]'),
+      ...explicitRoots.flatMap((root) => $$('a, button, [role="button"], [data-page], [data-page-number], [aria-current="page"], [class~="current"], [class~="active"], [class~="selected"]', root)),
+    ]).filter((el) => !el.closest?.(`#${SCRIPT_ID}, #${SCRIPT_ID}-jump-mask`) && numericControlValue(el));
+    const roots = uniqueElements(controls.map(numericPagerRoot)).filter((root) => root && root !== document.body && root !== document.documentElement);
+    const urlCurrent = parseInt(pageFromUrl() || "", 10);
+    let best = null;
+
+    for (const root of roots) {
+      try {
+        if (!visible(root) || root.querySelector("video") || root.querySelectorAll("img").length > 3) continue;
+        if (/calendar|datepicker|date-picker|carousel|slider|tabs?|years?|months?/i.test(`${root.className || ""} ${root.id || ""} ${root.getAttribute?.("role") || ""}`)) continue;
+
+        const items = uniqueElements($$('a, button, [role="button"], [data-page], [data-page-number], [aria-current="page"], [class~="current"], [class~="active"], [class~="selected"]', root));
+        const byPage = new Map();
+        for (const el of items) {
+          const page = parseInt(numericControlValue(el) || "", 10);
+          if (!Number.isFinite(page) || page < 1 || page > 99999) continue;
+          const existing = byPage.get(page);
+          const actionable = el.matches?.('a[href], button, [role="button"], [data-page], [data-page-number]');
+          if (!existing || (actionable && !existing.matches?.('a[href], button, [role="button"], [data-page], [data-page-number]'))) byPage.set(page, el);
+        }
+        const pages = [...byPage.keys()].sort((a, b) => a - b);
+        if (pages.length < 2) continue;
+
+        const explicitRoot = Boolean(root.matches?.(PAGINATION_CONTAINER_SELECTOR));
+        const currentEl = explicitCurrentElement(root);
+        const explicitCurrent = parseInt(numericControlValue(currentEl) || "", 10);
+        const urlNeighborsCurrent = Number.isFinite(urlCurrent) && (byPage.has(urlCurrent) || byPage.has(urlCurrent - 1) || byPage.has(urlCurrent + 1));
+        const current = Number.isFinite(explicitCurrent) ? explicitCurrent : (urlNeighborsCurrent ? urlCurrent : NaN);
+        const consecutive = pages.some((page, index) => index > 0 && page === pages[index - 1] + 1);
+        const urlEvidence = [...byPage.entries()].filter(([page, el]) => hasPageUrlEvidence(el, page)).length;
+        const dataEvidence = [...byPage.values()].filter((el) => el.hasAttribute?.("data-page") || el.hasAttribute?.("data-page-number")).length;
+        const directionEvidence = Boolean(root.querySelector?.('a[rel~="next"], a[rel~="prev"], [class*="next" i], [class*="prev" i], [aria-label*="next" i], [aria-label*="prev" i], [aria-label*="上一页"], [aria-label*="下一页"]'));
+        const structuralEvidence = urlEvidence >= 1 || dataEvidence >= 2 || directionEvidence;
+        const genericTrusted = Number.isFinite(current) && consecutive && ((urlEvidence >= 2 || dataEvidence >= 2) || directionEvidence);
+        if (!explicitRoot && !genericTrusted) continue;
+        if (explicitRoot && (!consecutive || !structuralEvidence)) continue;
+        if (explicitRoot && !Number.isFinite(current) && pages.length < 3 && !directionEvidence) continue;
+
+        let inferredCurrent = current;
+        if (!Number.isFinite(inferredCurrent) && directionEvidence && pages[0] === 2) inferredCurrent = 1;
+        if (!Number.isFinite(inferredCurrent)) continue;
+
+        const prev = byPage.get(inferredCurrent - 1) || null;
+        const next = byPage.get(inferredCurrent + 1) || null;
+        if (!prev && !next) continue;
+        const rect = root.getBoundingClientRect();
+        const score = (explicitRoot ? 100 : 0) + urlEvidence * 15 + (directionEvidence ? 20 : 0) + pages.length + Math.max(0, rect.top / Math.max(innerHeight, 1));
+        if (!best || score > best.score) best = { root, currentPage: String(inferredCurrent), prev, next, score };
+      } catch (error) {
+        log("数字分页容器识别失败", error);
+      }
+    }
+    return best;
+  }
+
+  function observePagerRoot(root) {
+    if (STATE.observedPagerRoot === root) return;
+    STATE.pagerObserver?.disconnect();
+    STATE.pagerObserver = null;
+    STATE.observedPagerRoot = root || null;
+    if (!root?.isConnected) return;
+    STATE.pagerObserver = new MutationObserver(() => scheduleUpdate(120));
+    STATE.pagerObserver.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["href", "class", "aria-current", "aria-disabled", "disabled", "hidden", "data-page"],
+    });
+  }
+
   function findByRel(direction) {
     const rel = direction === "next" ? "next" : "prev";
     return $(`a[rel~="${rel}"], link[rel~="${rel}"]`);
   }
 
-  function findCandidate(direction) {
+  function safeCall(label, fn, fallback = null) {
+    try {
+      return fn();
+    } catch (error) {
+      log(label, error);
+      return fallback;
+    }
+  }
+
+  function findCandidate(direction, numericPager = null) {
     if (isMissAv()) {
-      return findMissAvCandidate(direction);
+      return safeCall(`MissAV ${direction} 识别失败`, () => findMissAvCandidate(direction), null);
     }
 
     if (isRule34Video()) {
-      const siteCandidate = findRule34Candidate(direction);
+      const siteCandidate = safeCall(`Rule34 ${direction} 识别失败`, () => findRule34Candidate(direction), null);
       if (siteCandidate) return siteCandidate;
     }
 
     if (isEporner()) {
-      const siteCandidate = findEpornerCandidate(direction);
+      const siteCandidate = safeCall(`Eporner ${direction} 识别失败`, () => findEpornerCandidate(direction), null);
       if (siteCandidate) return siteCandidate;
     }
 
-    if (isEpornerVideoPage()) {
-      return null;
-    }
-
-    if (isFutapo2SingleCollectionPage()) {
-      return null;
-    }
+    if (isEpornerVideoPage()) return null;
+    if (isFutapo2SingleCollectionPage()) return null;
 
     if (isJable()) {
-      return findJableCandidate(direction);
+      return safeCall(`Jable ${direction} 识别失败`, () => findJableCandidate(direction), null);
+    }
+
+    if (isXVideosNewListPage() || isXVideosVideoPage()) {
+      return safeCall(`XVideos ${direction} 识别失败`, () => findXVideosCandidate(direction), null);
     }
 
     if (isXVideos()) {
-      return findXVideosCandidate(direction);
+      const siteCandidate = safeCall(`XVideos ${direction} 识别失败`, () => findXVideosCandidate(direction), null);
+      if (siteCandidate) return siteCandidate;
     }
 
     if (isOHentai()) {
-      return findOHentaiCandidate(direction);
+      return safeCall(`OHentai ${direction} 识别失败`, () => findOHentaiCandidate(direction), null);
     }
 
     if (isNodeSeek()) {
-      const siteCandidate = findNodeSeekCandidate(direction);
+      const siteCandidate = safeCall(`NodeSeek ${direction} 识别失败`, () => findNodeSeekCandidate(direction), null);
       if (siteCandidate) return siteCandidate;
     }
 
     if (isWhosTv()) {
-      const siteCandidate = findWhosTvCandidate(direction);
+      const siteCandidate = safeCall(`WhosTV ${direction} 识别失败`, () => findWhosTvCandidate(direction), null);
       if (siteCandidate) return siteCandidate;
     }
 
     if (isDiscuz()) {
-      const siteCandidate = findDiscuzCandidate(direction);
+      const siteCandidate = safeCall(`Discuz ${direction} 识别失败`, () => findDiscuzCandidate(direction), null);
       if (siteCandidate) return siteCandidate;
     }
 
-    const byRel = findByRel(direction);
+    const byRel = safeCall(`rel ${direction} 识别失败`, () => findByRel(direction), null);
     if (byRel && byRel.href && !disabled(byRel) && !deniedPaginationCandidate(byRel)) return byRel;
+
+    if (numericPager?.[direction]) return numericPager[direction];
 
     const selectors = [
       "a[href]",
       "button",
       "input[type=button]",
       "[role=button]",
+      "[data-page]",
       ".next",
       ".prev",
       ".previous",
@@ -243,6 +383,7 @@
       "[class*=next]",
       "[class*=prev]",
       "[aria-label]",
+      "[aria-labelledby]",
       "[title]",
     ];
 
@@ -250,7 +391,7 @@
     let best = null;
     let bestScore = 30; // 低于该分数认为误判风险较高
     for (const el of candidates) {
-      const s = scoreCandidate(el, direction);
+      const s = safeCall("候选元素评分失败", () => scoreCandidate(el, direction), -999);
       if (s > bestScore) {
         best = el;
         bestScore = s;
@@ -261,6 +402,10 @@
 
   function pageFromUrl(urlLike = location.href) {
     const url = new URL(urlLike, location.href);
+    const xvideosNewPage = getXVideosNewDisplayPage(url.href);
+    if (xvideosNewPage) return xvideosNewPage;
+    const xvideosSearchPage = getXVideosSearchDisplayPage(url.href);
+    if (xvideosSearchPage) return xvideosSearchPage;
     for (const key of ["page", "p", "paged", "pg", "pn", "pageNo", "pageNumber"]) {
       const value = url.searchParams.get(key);
       if (/^\d+$/.test(value || "")) return String(parseInt(value, 10));
@@ -297,6 +442,81 @@
 
   function isXVideos() {
     return /(^|\.)xvideos\.com$/i.test(location.hostname);
+  }
+
+  function isXVideosNewListPage(urlLike = location.href) {
+    try {
+      const url = new URL(urlLike, location.href);
+      if (!/(^|\.)xvideos\.com$/i.test(url.hostname)) return false;
+      if (/^\/new\/[1-9]\d{0,4}\/?$/i.test(url.pathname)) return true;
+      // 根路径同时承载首页和搜索结果。搜索使用 ?k=...&p=N，不能套用首页 /new/N 映射。
+      return url.pathname === "/" && !["k", "p", "page"].some((key) => url.searchParams.has(key));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function isXVideosSearchPage(urlLike = location.href) {
+    try {
+      const url = new URL(urlLike, location.href);
+      return /(^|\.)xvideos\.com$/i.test(url.hostname) && url.pathname === "/" && url.searchParams.has("k");
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function getXVideosSearchDisplayPage(urlLike = location.href) {
+    try {
+      const url = new URL(urlLike, location.href);
+      if (!isXVideosSearchPage(url.href)) return "";
+      const raw = url.searchParams.get("p");
+      if (raw == null || raw === "") return "1";
+      return /^\d{1,5}$/.test(raw) ? String(parseInt(raw, 10) + 1) : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function makeXVideosSearchPageUrl(displayPage) {
+    displayPage = parseInt(displayPage, 10);
+    if (!isXVideosSearchPage() || !Number.isFinite(displayPage) || displayPage < 1) return "";
+    const url = new URL(location.href);
+    if (displayPage === 1) url.searchParams.delete("p");
+    else url.searchParams.set("p", String(displayPage - 1));
+    url.searchParams.delete("page");
+    if (/^#_tabVideos(?:,page-\d+)?$/i.test(url.hash)) url.hash = "";
+    return url.href;
+  }
+
+  function isXVideosVideoPage(urlLike = location.href) {
+    try {
+      const url = new URL(urlLike, location.href);
+      return /(^|\.)xvideos\.com$/i.test(url.hostname) && /^\/video\./i.test(url.pathname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function getXVideosNewDisplayPage(urlLike = location.href) {
+    try {
+      const url = new URL(urlLike, location.href);
+      if (!/(^|\.)xvideos\.com$/i.test(url.hostname)) return "";
+      if (url.pathname === "/") return isXVideosNewListPage(url.href) ? "1" : "";
+      const match = url.pathname.match(/^\/new\/([1-9]\d{0,4})\/?$/i);
+      return match ? String(parseInt(match[1], 10) + 1) : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function makeXVideosNewPageUrl(displayPage) {
+    displayPage = parseInt(displayPage, 10);
+    if (!Number.isFinite(displayPage) || displayPage < 1) return "";
+    const url = new URL(location.href);
+    url.pathname = displayPage === 1 ? "/" : `/new/${displayPage - 1}`;
+    url.searchParams.delete("page");
+    if (/^#_tabVideos(?:,page-\d+)?$/i.test(url.hash)) url.hash = "";
+    return url.href;
   }
 
   function isJable() {
@@ -363,6 +583,8 @@
   function makeXVideosDisplayPageUrl(targetPage) {
     targetPage = parseInt(targetPage, 10);
     if (!Number.isFinite(targetPage) || targetPage < 1) return "";
+    if (isXVideosNewListPage()) return makeXVideosNewPageUrl(targetPage);
+    if (isXVideosSearchPage()) return makeXVideosSearchPageUrl(targetPage);
     const url = new URL(location.href);
     const pathPage = getXVideosPathPage();
     if (pathPage) {
@@ -400,6 +622,8 @@
   function makeXVideosPageUrl(targetPage) {
     targetPage = parseInt(targetPage, 10);
     if (!Number.isFinite(targetPage) || targetPage < 1) return "";
+    if (isXVideosNewListPage()) return makeXVideosNewPageUrl(targetPage);
+    if (isXVideosSearchPage()) return makeXVideosSearchPageUrl(targetPage);
     const url = new URL(location.href);
     const pathPage = getXVideosPathPage();
     if (pathPage) {
@@ -418,8 +642,13 @@
   function normalizeXVideosHashLater() {
     if (!isXVideos()) return;
     const page = pageFromUrl();
-    const match = String(location.hash || "").match(/^#_tabVideos,page-(\d+)$/i);
-    if (!page || !match || match[1] !== page) return;
+    const legacyHash = /^#_tabVideos(?:,page-\d+)?$/i.test(String(location.hash || ""));
+    const legacyQuery = new URL(location.href).searchParams.has("page");
+    if (!page || (!legacyHash && !legacyQuery)) return;
+    if (!isXVideosNewListPage()) {
+      const match = String(location.hash || "").match(/^#_tabVideos,page-(\d+)$/i);
+      if (!match || match[1] !== page) return;
+    }
     const cleanUrl = makeXVideosDisplayPageUrl(page);
     if (!cleanUrl) return;
     setTimeout(() => {
@@ -429,11 +658,41 @@
     }, 1500);
   }
 
+  function findXVideosNewPageLink(targetPage) {
+    targetPage = parseInt(targetPage, 10);
+    if (!Number.isFinite(targetPage) || targetPage < 1) return null;
+    let directionalFallback = null;
+    for (const el of $$('a[href]')) {
+      if (!visible(el) || disabled(el) || deniedPaginationCandidate(el)) continue;
+      if (parseInt(getXVideosNewDisplayPage(el.href) || "", 10) !== targetPage) continue;
+      if (parseInt(numericText(el) || "", 10) === targetPage) return el;
+      if (el.matches(".next-page, .prev-page") || paginationContainer(el)) directionalFallback = directionalFallback || el;
+    }
+    return directionalFallback;
+  }
+
   function findXVideosCandidate(direction) {
-    const current = parseInt(pageFromUrl() || getCurrentPage() || "1", 10);
+    if (isXVideosVideoPage()) return null;
+    if (isXVideosNewListPage()) {
+      const current = parseInt(getXVideosNewDisplayPage() || "", 10);
+      if (!Number.isFinite(current) || current < 1) return null;
+      const target = current + (direction === "next" ? 1 : -1);
+      if (target < 1) return null;
+      const realLink = findXVideosNewPageLink(target);
+      if (realLink) return realLink;
+      // 下一页必须由当前 DOM 证明，避免末页继续亮起；较小页已知存在，可安全构造上一页。
+      if (direction === "next") return null;
+      const url = makeXVideosNewPageUrl(target);
+      return url ? { __paginationUrl: url } : null;
+    }
+
+    // 其他 XVideos 分类/搜索页仍保留旧 tab 分页，但必须有真实分页证据，不能在详情页盲造地址。
+    const pager = detectNumericPager();
+    if (pager?.[direction]) return pager[direction];
+    const current = parseInt(pageFromUrl() || pager?.currentPage || "", 10);
     if (!Number.isFinite(current) || current < 1) return null;
     const target = current + (direction === "next" ? 1 : -1);
-    if (target < 1) return null;
+    if (target < 1 || direction === "next") return null;
     const url = makeXVideosPageUrl(target);
     return url ? { __paginationUrl: url } : null;
   }
@@ -868,9 +1127,11 @@
   }
 
   function numericText(el) {
+    const dataPage = String(el?.getAttribute?.("data-page") || el?.getAttribute?.("data-page-number") || "").trim();
+    if (/^0*\d{1,5}$/.test(dataPage)) return String(parseInt(dataPage, 10));
     const text = (el && (el.value || el.textContent || el.innerText || "")).trim();
-    const dataPage = isRule34Video() ? rule34PageFromDataParameters(el) : "";
-    if (dataPage) return dataPage;
+    const rule34DataPage = isRule34Video() ? rule34PageFromDataParameters(el) : "";
+    if (rule34DataPage) return rule34DataPage;
     const match = text.match(/^0*(\d{1,5})$/);
     return match ? String(parseInt(match[1], 10)) : "";
   }
@@ -1163,7 +1424,16 @@
     return url ? { __paginationUrl: url } : null;
   }
 
-  function getCurrentPage() {
+  function getCurrentPage(numericPager = null) {
+    if (isXVideosNewListPage()) {
+      const page = getXVideosNewDisplayPage();
+      if (page) return page;
+    }
+    if (isXVideosSearchPage()) {
+      const page = getXVideosSearchDisplayPage();
+      if (page) return page;
+    }
+
     if (isMissAv()) {
       const sitePage = getMissAvCurrentPage();
       if (sitePage) return sitePage;
@@ -1198,6 +1468,9 @@
       const sitePage = getWhosTvCurrentPage();
       if (sitePage) return sitePage;
     }
+
+    // 通用数字分页放在所有站点专用当前页逻辑之后，避免页面内其他数字组件覆盖站点语义。
+    if (numericPager?.currentPage) return numericPager.currentPage;
 
     const fromUrl = pageFromUrl();
     if (fromUrl) return fromUrl;
@@ -1293,9 +1566,11 @@
 
   function navigateDirection(direction) {
     if (STATE.navigating) return;
-    // 点击时重新识别一次。这样异步渲染或局部替换分页 DOM 的网站无需常驻观察整页，
-    // 仍能在真正翻页前拿到最新且仍连接在文档中的按钮。
-    const candidate = findCandidate(direction);
+    // 点击时重新生成数字分页快照并传给统一候选识别，避免无 class 数字分页丢失，
+    // 也避免通用评分把分页区中的任意数字链接错当成相邻页。
+    const numericPager = safeCall("点击前数字分页识别失败", detectNumericPager, null);
+    const candidate = safeCall(`${direction} 点击前识别失败`, () => findCandidate(direction, numericPager), null);
+    STATE.numericPager = numericPager;
     STATE[direction] = candidate;
     if (candidate) {
       clickOrNavigate(candidate);
@@ -1975,33 +2250,39 @@
       return;
     }
 
-    STATE.prev = findCandidate("prev");
-    STATE.next = findCandidate("next");
-    STATE.currentPage = getCurrentPage();
+    const numericPager = safeCall("数字分页识别失败", detectNumericPager, null);
+    STATE.numericPager = numericPager;
+    observePagerRoot(numericPager?.root || null);
+    STATE.prev = safeCall("上一页识别失败", () => findCandidate("prev", numericPager), null);
+    STATE.next = safeCall("下一页识别失败", () => findCandidate("next", numericPager), null);
+    STATE.currentPage = safeCall("当前页识别失败", () => getCurrentPage(numericPager), "?");
 
     // 很多分类/列表第一页 URL 没有 page 参数，或当前页没有 active 标记。
     // 这时从相邻按钮推断：下一页是 2 => 当前页是 1；上一页是 7 => 当前页是 8。
     if (STATE.currentPage === "?" || !STATE.currentPage) {
-      STATE.currentPage = inferCurrentPageFromAdjacent(STATE.prev, STATE.next) || STATE.currentPage;
+      STATE.currentPage = safeCall("相邻页码推断失败", () => inferCurrentPageFromAdjacent(STATE.prev, STATE.next), "") || STATE.currentPage;
     }
 
     const hasPagination = Boolean(STATE.prev || STATE.next);
-    const box = createMenu();
+    const box = safeCall("创建悬浮菜单失败", createMenu, null);
+    if (!box) return;
     box.dataset.hidden = "false";
     box.dataset.pagination = hasPagination ? "true" : "false";
     box.querySelector(".page span").textContent = STATE.currentPage;
     box.querySelector(".prev").disabled = !STATE.prev;
     box.querySelector(".next").disabled = !STATE.next;
     requestAnimationFrame(() => {
-      if (shouldForceRightBottomPosition() || !hasPagination) {
-        applyDefaultMenuPosition(box);
-      }
-      else if (STATE.savedPosition) {
-        applySavedMenuPosition(box);
-      } else {
-        applyDefaultMenuPosition(box);
-      }
-      syncBoundLink(box);
+      safeCall("悬浮菜单定位失败", () => {
+        if (shouldForceRightBottomPosition() || !hasPagination) {
+          applyDefaultMenuPosition(box);
+        }
+        else if (STATE.savedPosition) {
+          applySavedMenuPosition(box);
+        } else {
+          applyDefaultMenuPosition(box);
+        }
+        syncBoundLink(box);
+      });
     });
   }
 
@@ -2023,6 +2304,13 @@
     }, delay);
   }
 
+  function candidateUsable(candidate) {
+    if (!candidate) return false;
+    if (candidate.__paginationUrl) return true;
+    if (candidate.__paginationElement) return Boolean(candidate.__paginationElement.isConnected);
+    return !(candidate instanceof Element) || candidate.isConnected;
+  }
+
   function scheduleEventUpdate(withFallback = true) {
     scheduleUpdate(0);
     if (STATE.fallbackTimer) clearTimeout(STATE.fallbackTimer);
@@ -2032,7 +2320,7 @@
 
     const retryLatePagination = () => {
       STATE.fallbackTimer = null;
-      if (document.hidden || STATE.prev || STATE.next) return;
+      if (document.hidden || candidateUsable(STATE.prev) || candidateUsable(STATE.next)) return;
       scheduleUpdate(0);
       STATE.fallbackAttempt += 1;
       const delays = [1000, 2000, 4000];
@@ -2041,6 +2329,38 @@
       }
     };
     STATE.fallbackTimer = setTimeout(retryLatePagination, 1000);
+  }
+
+  function elementHasPaginationSignal(el) {
+    if (!(el instanceof Element)) return false;
+    if (el.matches?.(PAGINATION_CONTAINER_SELECTOR)) return true;
+    if (paginationContainer(el)) return true;
+    if (el.matches?.('[rel~="next"], [rel~="prev"], [aria-current="page"], [data-page], [data-page-number], [class*="next" i], [class*="prev" i]')) return true;
+    if (el.matches?.('a, button, [role="button"]')) {
+      const text = normalizeText(el);
+      return /^\s*0*\d{1,5}\s*$/.test(text) || /\bnext\b|\bprev(?:ious)?\b|下一页|上一页|[›»→‹«←]/i.test(text);
+    }
+    return false;
+  }
+
+  function mutationTouchesPagination(mutation) {
+    const mutationTarget = mutation.target instanceof Element ? mutation.target : mutation.target?.parentElement;
+    if (mutationTarget?.closest?.(`#${SCRIPT_ID}, #${SCRIPT_ID}-jump-mask`) || mutationTarget?.id === `${SCRIPT_ID}-style`) return false;
+    const nodes = [...mutation.addedNodes, ...mutation.removedNodes];
+    return nodes.some((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (!/^\s*\d{1,5}\s*$/.test(node.textContent || "")) return false;
+        const parent = node.parentElement || mutationTarget;
+        if (!(parent instanceof Element)) return false;
+        if (parent.closest?.(`#${SCRIPT_ID}, #${SCRIPT_ID}-jump-mask`)) return false;
+        return elementHasPaginationSignal(parent) || Boolean(parent.closest?.("ul, ol")?.querySelector?.('[aria-current="page"], [class~="current"], [class~="active"], [class~="selected"], [data-page], [data-page-number]'));
+      }
+      if (!(node instanceof Element)) return false;
+      if (node.closest?.(`#${SCRIPT_ID}, #${SCRIPT_ID}-jump-mask`) || node.id === `${SCRIPT_ID}-style`) return false;
+      if (node === document.body || elementHasPaginationSignal(node)) return true;
+      const descendants = $$(`${PAGINATION_CONTAINER_SELECTOR}, a, button, [role="button"], [data-page], [data-page-number], [aria-current="page"], [rel~="next"], [rel~="prev"]`, node);
+      return descendants.slice(0, 80).some(elementHasPaginationSignal);
+    });
   }
 
   function hookHistory() {
@@ -2053,8 +2373,8 @@
         return result;
       };
     };
-    wrap("pushState");
-    wrap("replaceState");
+    safeCall("包装 pushState 失败", () => wrap("pushState"));
+    safeCall("包装 replaceState 失败", () => wrap("replaceState"));
     window.addEventListener("popstate", () => {
       STATE.navigating = false;
       scheduleEventUpdate();
@@ -2102,13 +2422,14 @@
     scheduleEventUpdate();
 
     STATE.observer = new MutationObserver((mutations) => {
-      const bodyChanged = mutations.some(mutation => [...mutation.addedNodes, ...mutation.removedNodes].some(node => node === document.body))
-      const menuMissing = !document.getElementById(SCRIPT_ID)
-      const styleMissing = !document.getElementById(`${SCRIPT_ID}-style`)
-      if (bodyChanged || menuMissing || styleMissing) scheduleEventUpdate()
+      safeCall("动态分页观察失败", () => {
+        const menuMissing = !document.getElementById(SCRIPT_ID);
+        const styleMissing = !document.getElementById(`${SCRIPT_ID}-style`);
+        if (menuMissing || styleMissing || mutations.some(mutationTouchesPagination)) scheduleEventUpdate(false);
+      });
     });
-    // 只盯住 html 的直接子节点，用来发现 body 被整体替换；不常驻扫描整棵页面 DOM。
-    STATE.observer.observe(observeRoot, { childList: true });
+    // 观察整棵文档，但只在新增/移除节点含分页信号时防抖重扫；忽略脚本自身 UI。
+    STATE.observer.observe(observeRoot, { subtree: true, childList: true });
 
     let stabilizeTimer = null;
     const stabilizeMenuPosition = () => {
