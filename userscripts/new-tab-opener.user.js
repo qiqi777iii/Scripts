@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.0.6
+// @version      2.0.7
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -300,7 +300,7 @@
         }, 1000);
     }
 
-    function openLinkWithAnchor(href) {
+    function openLinkWithAnchor(href, shouldShowToast) {
         const link = document.createElement('a');
         link.href = href;
         link.target = '_blank';
@@ -315,7 +315,7 @@
         (document.body || document.documentElement).appendChild(link);
         try {
             link.click();
-            showBackgroundToast();
+            if (shouldShowToast !== false) showBackgroundToast();
         } catch (_) {}
         setTimeout(function () { link.remove(); }, 0);
     }
@@ -325,10 +325,11 @@
         try {
             if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
                 const task = GM.openInTab(href, { active: false });
-                if (task && typeof task.then === 'function') {
-                    task.then(showBackgroundToast).catch(function () { openLinkWithAnchor(href); });
-                } else {
-                    showBackgroundToast();
+                // Safari 可能已经创建标签，但 GM.openInTab 返回的 Promise 仍未完成；
+                // 提示应跟随已接受的用户操作立即显示，不能等待 Promise。
+                showBackgroundToast();
+                if (task && typeof task.catch === 'function') {
+                    task.catch(function () { openLinkWithAnchor(href, false); });
                 }
                 return;
             }
