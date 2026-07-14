@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.0.11
+// @version      2.0.12
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
-// @description  自动识别页面的上一页和下一页，并提供关闭标签页、刷新及可拖动的悬浮翻页按钮。
+// @description  自动识别页面的上一页和下一页，并提供关闭、新建空白标签页、刷新及可拖动的悬浮翻页按钮。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -14,6 +14,7 @@
 // @grant        GM.registerMenuCommand
 // @grant        GM.log
 // @grant        GM.closeTab
+// @grant        GM.openInTab
 // @grant        Scripting.tabs
 // ==/UserScript==
 
@@ -1255,6 +1256,14 @@
     }
   }
 
+  async function openBlankTab() {
+    try {
+      await GM.openInTab("about:blank", { active: true });
+    } catch (error) {
+      log("新建空白标签页失败", error);
+    }
+  }
+
   function reloadPage() {
     if (STATE.navigating) return;
     STATE.navigating = true;
@@ -1601,13 +1610,14 @@
       }
       #${SCRIPT_ID}[data-hidden="true"] { display: none; }
       #${SCRIPT_ID}[data-pagination="false"] {
-        width: ${PAGER_ITEM_SIZE * 2}px;
+        width: ${PAGER_ITEM_SIZE * 3}px;
         height: ${PAGER_ITEM_SIZE}px;
         border-radius: 999px;
         justify-content: center;
       }
       #${SCRIPT_ID}[data-pagination="false"] .pager-item { display: none; }
       #${SCRIPT_ID}[data-pagination="false"] .close-tab,
+      #${SCRIPT_ID}[data-pagination="false"] .new-tab,
       #${SCRIPT_ID}[data-pagination="false"] .refresh {
         width: ${PAGER_ITEM_SIZE}px;
         min-width: ${PAGER_ITEM_SIZE}px;
@@ -1651,7 +1661,8 @@
       @media (prefers-color-scheme: dark) {
         #${SCRIPT_ID} .close-tab { color: #ff453a; }
       }
-      #${SCRIPT_ID} .close-tab::after {
+      #${SCRIPT_ID} .close-tab::after,
+      #${SCRIPT_ID} .new-tab::after {
         content: "";
         position: absolute;
         top: 7px;
@@ -1660,6 +1671,14 @@
         width: 1px;
         background: var(--upfm-separator);
         pointer-events: none;
+      }
+      #${SCRIPT_ID} .new-tab svg {
+        width: 20px;
+        height: 20px;
+        stroke: currentColor;
+        stroke-width: 2.4;
+        stroke-linecap: round;
+        fill: none;
       }
       #${SCRIPT_ID} .refresh svg {
         width: ${REFRESH_ICON_SIZE}px;
@@ -1789,6 +1808,9 @@
       <button class="close-tab" type="button" title="关闭当前标签页" aria-label="关闭当前标签页">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"></path></svg>
       </button>
+      <button class="new-tab" type="button" title="新建空白标签页" aria-label="新建空白标签页">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
+      </button>
       <button class="refresh" type="button" title="刷新页面" aria-label="刷新页面">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M19.2 5.2v5.2h-5.2" />
@@ -1826,6 +1848,7 @@
     bindActionButton(box.querySelector(".prev"), () => navigateDirection("prev"));
     bindActionButton(box.querySelector(".next"), () => navigateDirection("next"));
     bindActionButton(box.querySelector(".close-tab"), closeCurrentTab);
+    bindActionButton(box.querySelector(".new-tab"), openBlankTab);
     bindActionButton(box.querySelector(".refresh"), reloadPage);
     setupPageControl(box, box.querySelector(".page"));
 
