@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.0.7
+// @version      2.0.8
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -33,6 +33,7 @@
     const SHARED_HISTORY_HOOK_KEY = '__qiqiSharedHistoryHookV1__';
     const COVER_PREVIEW_READY_ATTR = 'data-qiqi-cover-preview-ready';
     const BACKGROUND_OPEN_REQUEST_EVENT = 'qiqi:background-open-request';
+    const BACKGROUND_OPEN_GESTURE_MAX_AGE = 1500;
     const GROUP_LEFT_WIDTH = 35;
 
     let enabled = true;
@@ -51,6 +52,7 @@
     let backgroundToastTimer = null;
     let backgroundToastRemoveTimer = null;
     let valueChangeListenerInstalled = false;
+    let recentBackgroundOpenGesture = null;
 
     function getVal(key, def) {
         try {
@@ -423,13 +425,50 @@
         openLinkInBackground(href);
     }
 
+    function findCuratedGestureUrl(target) {
+        if (!(target instanceof Element)) return null;
+        const site = getSharedSiteKey(location.hostname);
+        // 只为“封面预览”会接管的真实封面手势建立握手；标题等普通视频链接走原有 click 逻辑。
+        if (!isCoverPreviewTarget(target, site)) return null;
+        const candidates = [];
+        const directLink = target.closest('a[href]');
+        if (directLink) candidates.push(directLink);
+        const card = target.closest('.__qiqi_mobile_preview_active__, .thumb-block, .mb, .item.thumb, a.th, .video-item, .js-video-item, [id^="recommended_video"]');
+        if (card) {
+            const cardLink = card.matches('a[href]') ? card : card.querySelector('a[href]');
+            if (cardLink && !candidates.includes(cardLink)) candidates.push(cardLink);
+        }
+        for (const link of candidates) {
+            let url;
+            try { url = new URL(link.getAttribute('href') || '', document.baseURI); } catch (_) { continue; }
+            if (shouldBackgroundOpenOnCuratedVideoSite(url) === true) return url.href;
+        }
+        return null;
+    }
+
+    function rememberBackgroundOpenGesture(event) {
+        if (event.isTrusted !== true) return;
+        const href = findCuratedGestureUrl(event.target);
+        if (!href) return;
+        recentBackgroundOpenGesture = { href, at: Date.now() };
+    }
+
+    function consumeMatchingBackgroundOpenGesture(href) {
+        const gesture = recentBackgroundOpenGesture;
+        recentBackgroundOpenGesture = null;
+        return Boolean(gesture && gesture.href === href && Date.now() - gesture.at <= BACKGROUND_OPEN_GESTURE_MAX_AGE);
+    }
+
     function handleBackgroundOpenRequest(event) {
         if (!enabled || event.detail?.source !== 'cover-video-preview') return;
-        if (navigator.userActivation && !navigator.userActivation.isActive) return;
         let url;
         try { url = new URL(String(event.detail.href || ''), document.baseURI); } catch (_) { return; }
         if (!/^https?:$/i.test(url.protocol) || url.username || url.password) return;
         if (shouldBackgroundOpenOnCuratedVideoSite(url) !== true) return;
+        // 该事件由另一个 userscript 在同一次真实 pointer/touch 手势中同步派发。
+        // Safari 的隔离环境可能让 navigator.userActivation 在接收端瞬间变为 false，
+        // 因此改用本脚本预先记录的可信手势，并严格核对同一视频 URL 与短时窗口。
+        if (!consumeMatchingBackgroundOpenGesture(url.href)) return;
         event.preventDefault();
         openLinkInBackground(url.href);
     }
@@ -874,6 +913,8 @@
         await loadEnabledState();
         installEnabledStateListener();
         window.addEventListener(BACKGROUND_OPEN_REQUEST_EVENT, handleBackgroundOpenRequest);
+        window.addEventListener('pointerdown', rememberBackgroundOpenGesture, true);
+        window.addEventListener('touchstart', rememberBackgroundOpenGesture, { capture: true, passive: true });
         window.addEventListener('click', handleCuratedVideoLinkOpenEarly, true);
         window.addEventListener('click', handleLinkOpen);
 
