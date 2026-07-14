@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.0.3
+// @version      2.0.4
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @description  自动识别页面的上一页和下一页，并提供关闭标签页、刷新及可拖动的悬浮翻页按钮。
@@ -23,11 +23,12 @@
   const SCRIPT_ID = "universal-pagination-floating-menu";
   const POS_KEY = `${SCRIPT_ID}:position:v13-group`;
   const SAFE_BOTTOM_GAP = 40;
+  const DEFAULT_BOTTOM_GAP = 35;
   const PAGER_ITEM_SIZE = 35;
   const PAGE_MIN_WIDTH = 35;
   const FALLBACK_PAGER_WIDTH = PAGER_ITEM_SIZE * 3 + PAGE_MIN_WIDTH;
   const REFRESH_ICON_SIZE = 21;
-  const DEFAULT_RIGHT_GAP = 56;
+  const DEFAULT_RIGHT_GAP = 55;
   const NODESEEK_BOTTOM_EXTRA = 0;
   const ENABLE_KEY = `${SCRIPT_ID}:enabled`;
   const BOUND_LINK_ID = "__tb__";
@@ -1403,7 +1404,7 @@
   }
 
   function getDefaultBottomGap() {
-    return SAFE_BOTTOM_GAP + (isNodeSeek() ? NODESEEK_BOTTOM_EXTRA : 0);
+    return DEFAULT_BOTTOM_GAP + (isNodeSeek() ? NODESEEK_BOTTOM_EXTRA : 0);
   }
 
   function positionBoundControl(control, left, box, rect) {
