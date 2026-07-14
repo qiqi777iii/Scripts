@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.0.9
+// @version      2.0.10
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @description  自动识别页面的上一页和下一页，并提供关闭标签页、刷新及可拖动的悬浮翻页按钮。
@@ -1153,13 +1153,6 @@
     try { target = new URL(url, location.href).href; } catch (_) { return; }
     if (!/^https?:/i.test(target)) return;
     STATE.navigating = true;
-    try {
-      const box = $(`#${SCRIPT_ID}`);
-      if (box) {
-        box.querySelectorAll("button").forEach((button) => (button.disabled = true));
-        box.style.opacity = "0.72";
-      }
-    } catch (_) {}
     window.location.assign(target);
   }
 
@@ -1167,21 +1160,12 @@
     if (STATE.navigating) return;
     STATE.navigating = true;
     try {
-      const box = $(`#${SCRIPT_ID}`);
-      if (box) {
-        box.querySelectorAll("button").forEach((button) => (button.disabled = true));
-        box.style.opacity = "0.72";
-      }
       const current = await Scripting.tabs.getCurrent();
       if (!Number.isInteger(current?.id)) throw new Error("无法获取当前标签页 ID");
       await GM.closeTab(current.id);
     } catch (error) {
       STATE.navigating = false;
-      const box = $(`#${SCRIPT_ID}`);
-      if (box) {
-        box.style.opacity = "";
-        updateMenu();
-      }
+      updateMenu();
       log("关闭当前标签页失败", error);
     }
   }
@@ -1189,13 +1173,6 @@
   function reloadPage() {
     if (STATE.navigating) return;
     STATE.navigating = true;
-    try {
-      const box = $(`#${SCRIPT_ID}`);
-      if (box) {
-        box.querySelectorAll("button").forEach((button) => (button.disabled = true));
-        box.style.opacity = "0.72";
-      }
-    } catch (_) {}
     location.reload();
     setTimeout(() => {
       window.location.href = location.href;
@@ -1570,7 +1547,7 @@
         cursor: pointer;
         font-size: 16px;
         -webkit-tap-highlight-color: transparent;
-        transition: background .18s ease, transform .12s ease, opacity .18s ease;
+        transition: opacity .18s ease;
       }
       #${SCRIPT_ID} button svg {
         width: 21px;
@@ -1582,10 +1559,6 @@
       #${SCRIPT_ID} .next svg {
         width: 22px;
         height: 22px;
-      }
-      #${SCRIPT_ID} button:active {
-        background: var(--upfm-active);
-        transform: scale(.94);
       }
       #${SCRIPT_ID} button[disabled] { opacity: .28; cursor: default; transform: none; }
       #${SCRIPT_ID} button[disabled]:active { background: transparent; }
