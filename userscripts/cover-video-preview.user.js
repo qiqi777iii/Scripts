@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         封面视频预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.10
+// @version      1.0.11
 // @description  在手机上首次点按视频封面播放静音预览，再次点按进入详情；滑动不误触，长按保留 Safari 原生行为。
 // @match        *://rule34video.com/*
 // @match        *://*.rule34video.com/*
@@ -32,6 +32,7 @@
     const BLOCK_NATIVE_SITE_PREVIEW = IS_SPANKBANG || IS_EPORNER;
     const LONG_PRESS_MS = 600;
     const SWIPE_CANCEL_DISTANCE = 12;
+    const SWIPE_PAGE_MOVE_DISTANCE = 4;
     const SWIPE_CLICK_BLOCK_MS = 650;
 
     let active = null;
@@ -516,6 +517,8 @@
     window.addEventListener('mouseenter', blockConflictingNativePreview, true);
 
     window.addEventListener('touchstart', function (event) {
+        // 新的触摸代表用户开始了一次主动操作；不要让上一次滑动留下的短时屏蔽吞掉这次点击。
+        swipeClickBlock = null;
         if (event.touches.length !== 1) {
             touchOrigin = null;
             return;
@@ -545,7 +548,9 @@
         if (!touchOrigin || event.touches.length !== 1) return;
         const touch = event.touches[0];
         const distance = Math.hypot(touch.clientX - touchOrigin.x, touch.clientY - touchOrigin.y);
-        const pageMoved = Math.abs(window.scrollY - touchOrigin.scrollY) >= 4;
+        // 页面位移只有在本次手指也确实移动时才算滑动，避免把上一轮滚动的惯性误判成新点击。
+        const pageMoved = distance >= SWIPE_PAGE_MOVE_DISTANCE &&
+            Math.abs(window.scrollY - touchOrigin.scrollY) >= SWIPE_PAGE_MOVE_DISTANCE;
         if (distance < SWIPE_CANCEL_DISTANCE && !pageMoved) return;
         cancelTouchForSwipe();
     }, { capture: true, passive: true });
@@ -565,7 +570,7 @@
         }
         const origin = touchOrigin;
         touchOrigin = null;
-        if (origin?.moved || (origin?.cover && Math.abs(window.scrollY - origin.scrollY) >= 4)) {
+        if (origin?.moved) {
             blockSwipeClick(origin);
             return;
         }
@@ -607,9 +612,6 @@
     window.addEventListener('scroll', function (event) {
         // 只响应页面级滚动；忽略元素内部滚动，避免误取消。
         if (event.target !== document && event.target !== document.documentElement && event.target !== window) return;
-        if (touchOrigin?.cover && Math.abs(window.scrollY - touchOrigin.scrollY) >= 4) {
-            cancelTouchForSwipe();
-        }
         // 预览刚开始时，地址栏收缩/布局位移会触发 scroll，短暂宽限。
         if (Date.now() - previewStartedAt < 400) {
             previewScrollY = window.scrollY;
