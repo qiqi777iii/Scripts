@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         悬浮翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.0.12
+// @version      2.0.13
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js
-// @description  自动识别页面的上一页和下一页，并提供关闭、新建空白标签页、刷新及可拖动的悬浮翻页按钮。
+// @description  自动识别页面的上一页和下一页，并提供关闭、新建 Safari 起始页、刷新及可拖动的悬浮翻页按钮。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -1256,11 +1256,12 @@
     }
   }
 
-  async function openBlankTab() {
+  async function openStartPage() {
     try {
-      await GM.openInTab("about:blank", { active: true });
+      // WebExtension 只有在不提供 URL 时，才会按 Safari 原生“+”按钮的方式创建起始页。
+      await GM.openInTab(undefined, { active: true });
     } catch (error) {
-      log("新建空白标签页失败", error);
+      log("新建 Safari 起始页失败", error);
     }
   }
 
@@ -1808,7 +1809,7 @@
       <button class="close-tab" type="button" title="关闭当前标签页" aria-label="关闭当前标签页">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"></path></svg>
       </button>
-      <button class="new-tab" type="button" title="新建空白标签页" aria-label="新建空白标签页">
+      <button class="new-tab" type="button" title="新建 Safari 起始页" aria-label="新建 Safari 起始页">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
       </button>
       <button class="refresh" type="button" title="刷新页面" aria-label="刷新页面">
@@ -1848,7 +1849,7 @@
     bindActionButton(box.querySelector(".prev"), () => navigateDirection("prev"));
     bindActionButton(box.querySelector(".next"), () => navigateDirection("next"));
     bindActionButton(box.querySelector(".close-tab"), closeCurrentTab);
-    bindActionButton(box.querySelector(".new-tab"), openBlankTab);
+    bindActionButton(box.querySelector(".new-tab"), openStartPage);
     bindActionButton(box.querySelector(".refresh"), reloadPage);
     setupPageControl(box, box.querySelector(".page"));
 
