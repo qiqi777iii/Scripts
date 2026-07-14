@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         封面视频预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.7
+// @version      1.0.8
 // @description  在手机上首次点按视频封面播放静音预览，再次点按进入详情；长按保留 Safari 原生行为。
 // @match        *://rule34video.com/*
 // @match        *://*.rule34video.com/*
@@ -360,15 +360,6 @@
         return true;
     }
 
-    function shouldOpenInNewTab() {
-        try {
-            const value = localStorage.getItem('__tb_newTabEnabled');
-            return value === null ? true : value !== 'false';
-        } catch (_) {
-            return true;
-        }
-    }
-
     function requestBackgroundOpen(href) {
         const event = new CustomEvent(BACKGROUND_OPEN_REQUEST_EVENT, {
             cancelable: true,
@@ -383,25 +374,10 @@
         if (!href) return;
         stopActive();
         suppressClickUntil = Date.now() + 1200;
-        if (!shouldOpenInNewTab()) {
-            location.assign(href);
-            return;
-        }
-        // 优先交给“新标签页打开”脚本，以 GM.openInTab(active:false) 真正后台打开；
-        // 未安装或未启用时才回退到浏览器原生 _blank。
+        // “新标签页打开”存在且已开启时会接管为真正的后台标签；
+        // 未安装或已关闭时无人接管，封面预览保持独立并按网站原行为进入当前页。
         if (requestBackgroundOpen(href)) return;
-        try {
-            window.open(href, '_blank', 'noopener');
-            return;
-        } catch (_) {}
-        const link = document.createElement('a');
-        link.href = href;
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.dataset.tbInternalOpen = 'true';
-        link.style.display = 'none';
-        (document.body || document.documentElement).appendChild(link);
-        try { link.click(); } finally { setTimeout(function () { link.remove(); }, 0); }
+        location.assign(href);
     }
 
     window.addEventListener('click', function (event) {
