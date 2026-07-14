@@ -105,6 +105,7 @@
 // @grant       GM_openInTab
 // @run-at      document-idle
 
+// @downloadURL none
 // ==/UserScript==
 
 (function() {
