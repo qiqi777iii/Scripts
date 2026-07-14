@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         封面视频预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.8
+// @version      1.0.9
 // @description  在手机上首次点按视频封面播放静音预览，再次点按进入详情；长按保留 Safari 原生行为。
 // @match        *://rule34video.com/*
 // @match        *://*.rule34video.com/*
@@ -27,6 +27,10 @@
     const COVER_PREVIEW_READY_ATTR = 'data-qiqi-cover-preview-ready';
     const BACKGROUND_OPEN_REQUEST_EVENT = 'qiqi:background-open-request';
     const IS_MISSAV = /(^|\.)missav\.ws$/i.test(location.hostname);
+    const IS_SPANKBANG = /(^|\.)spankbang\.com$/i.test(location.hostname);
+    const IS_EPORNER = /(^|\.)eporner\.com$/i.test(location.hostname);
+    const BLOCK_NATIVE_SITE_PREVIEW = IS_SPANKBANG || IS_EPORNER;
+    const LONG_PRESS_MS = 600;
 
     let active = null;
     let activeUrl = null;
@@ -36,6 +40,8 @@
     let enforcingSinglePreview = false;
     let previewStartedAt = 0;
     let previewScrollY = null;
+    let nativePreviewBlockUntil = 0;
+    let nativePreviewBlockUrl = null;
 
     function addStyle() {
         if (document.getElementById('__qiqi_mobile_preview_style__')) return;
@@ -56,6 +62,8 @@
 
         card = safeClosest(target, 'a[href]');
         if (card?.querySelector('video.preview[data-src], video.preview[src]') && card.querySelector('img')) return card;
+        if (IS_SPANKBANG && card?.matches('[data-testid="recommended-video"]') &&
+            card.querySelector('img') && card.querySelector('video source[data-src], video source[src]')) return card;
 
         card = safeClosest(target, '.thumb-block');
         if (card?.querySelector('img[data-pvv]')) return card;
@@ -394,6 +402,8 @@
             return;
         }
 
+        if (!isCoverTarget(card, event.target)) return;
+
         const currentUrl = cardUrl(card);
         const nativeVideo = card.querySelector('video.preview[data-src], video.preview[src]');
         const nativePreviewIsOpen = Boolean(nativeVideo && (
@@ -405,8 +415,6 @@
             openCardLink(card);
             return;
         }
-
-        if (!isCoverTarget(card, event.target)) return;
 
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -457,14 +465,48 @@
         if (active || document.querySelector('video.preview:not(.hidden)')) stopActive();
     }
 
-    document.addEventListener('touchstart', function (event) {
+    function blockConflictingNativePreview(event) {
+        if (!BLOCK_NATIVE_SITE_PREVIEW) return;
+        const fromTouchPointer = event.pointerType === 'touch';
+        if (!fromTouchPointer && Date.now() > nativePreviewBlockUntil) return;
+        const card = findCard(event.target);
+        if (!card || !isCoverTarget(card, event.target)) return;
+        const url = cardUrl(card);
+        if (!fromTouchPointer && nativePreviewBlockUrl && url !== nativePreviewBlockUrl) return;
+        if (fromTouchPointer) {
+            nativePreviewBlockUrl = url;
+            nativePreviewBlockUntil = Date.now() + 1200;
+        }
+        event.stopImmediatePropagation();
+    }
+
+    window.addEventListener('pointerover', blockConflictingNativePreview, true);
+    window.addEventListener('pointerenter', blockConflictingNativePreview, true);
+    window.addEventListener('mouseover', blockConflictingNativePreview, true);
+    window.addEventListener('mouseenter', blockConflictingNativePreview, true);
+
+    window.addEventListener('touchstart', function (event) {
         if (event.touches.length !== 1) {
             touchOrigin = null;
             return;
         }
         const touch = event.touches[0];
         const card = findCard(event.target);
-        touchOrigin = { x: touch.clientX, y: touch.clientY, card, url: cardUrl(card) };
+        const cover = Boolean(card && isCoverTarget(card, event.target));
+        touchOrigin = {
+            x: touch.clientX,
+            y: touch.clientY,
+            card,
+            url: cardUrl(card),
+            cover,
+            startedAt: Date.now(),
+        };
+        if (BLOCK_NATIVE_SITE_PREVIEW && cover) {
+            nativePreviewBlockUrl = cardUrl(card);
+            nativePreviewBlockUntil = Date.now() + 1200;
+            // 只阻止站点先执行 touchstart 预览，不取消 Safari 的链接长按默认行为。
+            event.stopImmediatePropagation();
+        }
     }, { capture: true, passive: true });
 
     document.addEventListener('touchmove', function (event) {
@@ -476,15 +518,28 @@
     }, { capture: true, passive: true });
 
     window.addEventListener('touchend', function (event) {
+        const eventCard = findCard(event.target);
+        const eventIsCover = Boolean(eventCard && isCoverTarget(eventCard, event.target));
+        if (BLOCK_NATIVE_SITE_PREVIEW && eventIsCover) {
+            nativePreviewBlockUrl = cardUrl(eventCard);
+            nativePreviewBlockUntil = Date.now() + 800;
+            // Eporner 在 document touchend 中启动原生预览；同时拦截随后合成的 mouseenter。
+            event.stopImmediatePropagation();
+        }
         if (IS_MISSAV) {
             touchOrigin = null;
             return;
         }
         const origin = touchOrigin;
         touchOrigin = null;
-        if (!origin?.card) return;
+        if (!origin?.card || !origin.cover || !eventIsCover) return;
+        if (Date.now() - origin.startedAt >= LONG_PRESS_MS) {
+            // 长按结束后抑制可能补发的 click，保留 Safari 原生链接菜单。
+            suppressClickUntil = Math.max(suppressClickUntil, Date.now() + 800);
+            return;
+        }
 
-        const card = findCard(event.target) || origin.card;
+        const card = eventCard || origin.card;
         const currentUrl = cardUrl(card);
         if (!currentUrl || currentUrl !== origin.url) return;
         const video = card.querySelector('video.preview[data-src], video.preview[src]');
@@ -495,6 +550,15 @@
         event.stopImmediatePropagation();
         openCardLink(card);
     }, { capture: true, passive: false });
+
+    window.addEventListener('contextmenu', function (event) {
+        const card = findCard(event.target);
+        if (!card || !isCoverTarget(card, event.target)) return;
+        touchOrigin = null;
+        nativePreviewBlockUrl = cardUrl(card);
+        nativePreviewBlockUntil = Date.now() + 800;
+        suppressClickUntil = Math.max(suppressClickUntil, Date.now() + 800);
+    }, true);
 
     document.addEventListener('touchend', function () { touchOrigin = null; }, { capture: true, passive: true });
     document.addEventListener('touchcancel', function () { touchOrigin = null; }, { capture: true, passive: true });
