@@ -9,6 +9,7 @@
 | 悬浮翻页 | 自动识别上一页、下一页，并显示可拖动的悬浮翻页按钮。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-pager.user.js) |
 | 磁力链验车 | 为网页中的磁力链接提供验车和复制功能。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/magnet-link-checker.user.js) |
 | 新标签页打开 | 通过悬浮开关控制网页链接是否在 Safari 新标签页中打开。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js) |
+| MissAV Plyr 本地样式修复 | 内置 Plyr 样式，避免 CDN 请求失败导致 MissAV 播放器布局损坏。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/missav-plyr-local-style.user.js) |
 | 番号快速搜索 | 识别网页番号，并提供面向移动端的快捷搜索功能。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/search-av-mobile.user.js) |
 | SenPlayer 播放 | 捕获当前网页视频地址，并通过 SenPlayer 打开播放。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/senplayer-video-button.user.js) |
 | 播放当前页视频 | 在网页中提供播放、暂停、快进、后退和全屏等悬浮控制。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-player.user.js) |
