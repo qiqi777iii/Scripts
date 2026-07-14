@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.0.5
+// @version      2.0.6
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -31,6 +31,8 @@
     const GROUP_DRAG_EVENT = 'qiqi-floating-toolbar-group-drag';
     const SHARED_URL_CHANGE_EVENT = 'qiqi:urlchange';
     const SHARED_HISTORY_HOOK_KEY = '__qiqiSharedHistoryHookV1__';
+    const COVER_PREVIEW_READY_ATTR = 'data-qiqi-cover-preview-ready';
+    const BACKGROUND_OPEN_REQUEST_EVENT = 'qiqi:background-open-request';
     const GROUP_LEFT_WIDTH = 35;
 
     let enabled = true;
@@ -391,12 +393,26 @@
             !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
     }
 
+    function isCoverPreviewTarget(target, site) {
+        if (!(target instanceof Element) || document.documentElement?.getAttribute(COVER_PREVIEW_READY_ATTR) !== '1') return false;
+        if (target.closest('.__qiqi_mobile_preview_active__')) return true;
+        if (site === 'rule34video.com') return Boolean(target.closest('[data-preview]'));
+        if (site === 'eporner.com') return Boolean(target.closest('.mbimg'));
+        if (site === 'xvideos.com') return Boolean(target.closest('.thumb-block:not(.thumb-ad) .thumb'));
+        if (site === 'spankbang.com') {
+            const link = target.closest('a[href]');
+            return Boolean(link && link.closest('.video-item, .js-video-item, [id^="recommended_video"]') && link.querySelector('img, video, source'));
+        }
+        return false;
+    }
+
     function handleCuratedVideoLinkOpenEarly(e) {
         const site = getSharedSiteKey(location.hostname);
         // 这些站会在卡片或 document 的冒泡阶段追加当前页跳转或广告弹窗，
-        // 所以视频链接要先接管；Rule34Video 保留晚期处理，让横滑预览能取消 click。
+        // 所以视频链接要先接管；封面预览脚本存在时，封面点击交给它处理，
+        // 标题点击仍直接后台打开。Rule34Video 保留晚期处理以兼容原生横滑预览。
         if (!['spankbang.com', 'eporner.com', 'xvideos.com'].includes(site) || !isPlainPrimaryClick(e)) return;
-        if (toolbar?.contains(e.target)) return;
+        if (toolbar?.contains(e.target) || isCoverPreviewTarget(e.target, site)) return;
         const a = findLinkTarget(e.target);
         if (!a || a.dataset.tbInternalOpen === 'true') return;
         const href = getBackgroundOpenUrl(a);
@@ -404,6 +420,17 @@
         e.preventDefault();
         e.stopImmediatePropagation();
         openLinkInBackground(href);
+    }
+
+    function handleBackgroundOpenRequest(event) {
+        if (!enabled || event.detail?.source !== 'cover-video-preview') return;
+        if (navigator.userActivation && !navigator.userActivation.isActive) return;
+        let url;
+        try { url = new URL(String(event.detail.href || ''), document.baseURI); } catch (_) { return; }
+        if (!/^https?:$/i.test(url.protocol) || url.username || url.password) return;
+        if (shouldBackgroundOpenOnCuratedVideoSite(url) !== true) return;
+        event.preventDefault();
+        openLinkInBackground(url.href);
     }
 
     function handleLinkOpen(e) {
@@ -845,6 +872,7 @@
     async function start() {
         await loadEnabledState();
         installEnabledStateListener();
+        window.addEventListener(BACKGROUND_OPEN_REQUEST_EVENT, handleBackgroundOpenRequest);
         window.addEventListener('click', handleCuratedVideoLinkOpenEarly, true);
         window.addEventListener('click', handleLinkOpen);
 

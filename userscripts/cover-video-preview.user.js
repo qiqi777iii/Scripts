@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         封面视频预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.6
+// @version      1.0.7
 // @description  在手机上首次点按视频封面播放静音预览，再次点按进入详情；长按保留 Safari 原生行为。
 // @match        *://rule34video.com/*
 // @match        *://*.rule34video.com/*
@@ -24,6 +24,8 @@
 
     const PREVIEW_CLASS = '__qiqi_mobile_preview__';
     const ACTIVE_CLASS = '__qiqi_mobile_preview_active__';
+    const COVER_PREVIEW_READY_ATTR = 'data-qiqi-cover-preview-ready';
+    const BACKGROUND_OPEN_REQUEST_EVENT = 'qiqi:background-open-request';
     const IS_MISSAV = /(^|\.)missav\.ws$/i.test(location.hostname);
 
     let active = null;
@@ -367,6 +369,15 @@
         }
     }
 
+    function requestBackgroundOpen(href) {
+        const event = new CustomEvent(BACKGROUND_OPEN_REQUEST_EVENT, {
+            cancelable: true,
+            detail: { source: 'cover-video-preview', href },
+        });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+    }
+
     function openCardLink(card) {
         const href = cardUrl(card);
         if (!href) return;
@@ -376,6 +387,9 @@
             location.assign(href);
             return;
         }
+        // 优先交给“新标签页打开”脚本，以 GM.openInTab(active:false) 真正后台打开；
+        // 未安装或未启用时才回退到浏览器原生 _blank。
+        if (requestBackgroundOpen(href)) return;
         try {
             window.open(href, '_blank', 'noopener');
             return;
@@ -527,5 +541,6 @@
         if (document.hidden) stopActive();
     });
 
+    document.documentElement?.setAttribute(COVER_PREVIEW_READY_ATTR, '1');
     addStyle();
 })();
