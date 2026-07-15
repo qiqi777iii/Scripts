@@ -130,7 +130,7 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "2.1.0"
+const APP_VERSION = "2.0.2"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = {
   version: string
@@ -140,7 +140,7 @@ type ChangelogEntry = {
 }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
-    version: "2.1.0",
+    version: "2.0.2",
     date: "2026-07-15",
     summary: "整理版本记录",
     items: [
