@@ -130,7 +130,7 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "2.0.2"
+const APP_VERSION = "2.0.3"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = {
   version: string
@@ -139,6 +139,14 @@ type ChangelogEntry = {
   items: string[]
 }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "2.0.3",
+    date: "2026-07-15",
+    summary: "修复悬浮按钮重叠",
+    items: [
+      "收藏按钮会优先排列在新标签页打开按钮左侧，不再遮挡新标签页按钮。",
+    ],
+  },
   {
     version: "2.0.2",
     date: "2026-07-15",

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 2.0.2
+// @version 2.0.3
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -22,10 +22,11 @@
   const DEFAULT_GROUP_NAME = "默认"
   const BTN_SIZE = 35
 
-  // 收藏按钮默认放在悬浮翻页工具栏左侧，拖动后使用自己的独立位置。
+  // 收藏按钮默认放在“新标签页打开”按钮左侧；其未加载时再放到悬浮翻页工具栏左侧。
+  const NEW_TAB_TOOLBAR_ID = "__tb__"
   const PAGER_ID = "universal-pagination-floating-menu"
   const INITIAL_GAP = 8
-  const LAYOUT_VERSION = "0.2.35-pager-left-v1"
+  const LAYOUT_VERSION = "2.0.3-new-tab-left-v1"
   const FALLBACK_RIGHT = 234
   const BOTTOM_GAP = 40
 
@@ -545,16 +546,16 @@
   function applyDefaultPosition() {
     if (!wrap) return
     const viewport = getViewportBox()
-    const pager = document.getElementById(PAGER_ID)
-    if (pager) {
-      const rect = pager.getBoundingClientRect()
+    const neighbor = document.getElementById(NEW_TAB_TOOLBAR_ID) || document.getElementById(PAGER_ID)
+    if (neighbor) {
+      const rect = neighbor.getBoundingClientRect()
       if (rect.width > 0 && rect.height > 0) {
         const pos = clampPos(rect.left - INITIAL_GAP - BTN_SIZE, rect.top)
         wrap.style.left = pos.left + "px"
         wrap.style.right = "auto"
-        const usesBottom = pager.style.bottom && pager.style.bottom !== "auto" && (!pager.style.top || pager.style.top === "auto")
+        const usesBottom = neighbor.style.bottom && neighbor.style.bottom !== "auto" && (!neighbor.style.top || neighbor.style.top === "auto")
         if (usesBottom) {
-          wrap.style.bottom = pager.style.bottom
+          wrap.style.bottom = neighbor.style.bottom
           wrap.style.top = "auto"
         } else {
           wrap.style.top = pos.top + "px"
@@ -767,6 +768,7 @@
           node === document.head ||
           node?.tagName === "HEAD" ||
           node?.id === WRAP_ID ||
+          node?.id === NEW_TAB_TOOLBAR_ID ||
           node?.id === PAGER_ID
         )) {
           watchHead(document.head)
@@ -775,7 +777,7 @@
         }
       }
     })
-    rootObserver.observe(root, { childList: true })
+    rootObserver.observe(root, { childList: true, subtree: true })
   }
 
   function migrateDefaultPosition() {
