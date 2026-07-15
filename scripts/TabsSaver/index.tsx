@@ -130,218 +130,77 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "2.0.1"
+const APP_VERSION = "2.1.0"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
-type ChangelogEntry = { version: string; date: string; items: string[] }
+type ChangelogEntry = {
+  version: string
+  date: string
+  summary: string
+  items: string[]
+}
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
-    version: "2.0.1",
-    date: "2026-07-14",
+    version: "2.1.0",
+    date: "2026-07-15",
+    summary: "整理版本记录",
     items: [
-      "保护损坏收藏库，增加跨窗口平面文件锁与版本校验，并刷新 SPA 页面收藏状态。",
+      "版本更新记录按功能阶段合并展示，减少连续小版本占用的列表空间。",
+      "历史更新内容重新归纳为数据安全、WebDAV、收藏管理、组件与基础同步等主题。",
     ],
   },
   {
-    version: "2.0",
-    date: "2026-07-13",
+    version: "2.0.x",
+    date: "2026-07-13 — 2026-07-14",
+    summary: "数据安全与回收站",
     items: [
+      "保护损坏收藏库，增加跨窗口平面文件锁与版本校验。",
+      "Safari 收藏按钮会刷新 SPA 页面收藏状态。",
       "回收站保留期限调整为 3 天、7 天、15 天和永久。",
     ],
   },
   {
-    version: "1.5.13",
+    version: "1.5.x",
     date: "2026-07-13",
+    summary: "界面与版本统一",
     items: [
       "移除标签页管理菜单中的显示设置，分组列表统一显示分割线。",
-      "内置 Safari 浏览器脚本与 Scripting 脚本统一使用同一个版本号。",
+      "内置 Safari 收藏按钮与 Scripting 脚本开始统一使用同一个版本号。",
     ],
   },
   {
-    version: "1.4.7",
+    version: "1.4.x",
     date: "2026-07-12",
+    summary: "WebDAV 恢复与批量管理",
     items: [
-      "分组排序入口移到主界面分组的长按菜单，并从显示设置中移除。",
+      "重新整理 WebDAV 恢复页，合并当前版本与历史备份并简化版本摘要。",
+      "恢复前自动保存本机保护副本，并支持撤销最近一次恢复。",
+      "历史备份显示文件大小及相对前一备份的新增、删除数量。",
+      "分组支持批量移动收藏，并可在移动时直接新建目标分组。",
+      "分组排序入口移到主界面分组的长按菜单。",
     ],
   },
   {
-    version: "1.4.6",
+    version: "1.3.x",
     date: "2026-07-12",
-    items: [
-      "WebDAV 恢复页移除多余的本机信息区域，只保留可恢复的 WebDAV 当前版本和历史备份。",
-    ],
-  },
-  {
-    version: "1.4.5",
-    date: "2026-07-12",
-    items: [
-      "恢复页移除 WebDAV 备份数量统计，并从版本摘要中删除容易与备份时间混淆的数据更新时间。",
-    ],
-  },
-  {
-    version: "1.4.4",
-    date: "2026-07-12",
-    items: [
-      "恢复页将当前本机简化为本机，并把最新上传的 WebDAV 当前版本合并到 WebDAV 备份列表。",
-      "最新上传版本会明确标注当前版本，历史快照仍可单独删除。",
-    ],
-  },
-  {
-    version: "1.4.3",
-    date: "2026-07-12",
-    items: [
-      "WebDAV 恢复页新增当前 WebDAV 版本，上传后可直接核对其与当前本机的数据。",
-      "历史备份名称只显示日期和时间，不再显示 store 前缀、毫秒和文件扩展名。",
-    ],
-  },
-  {
-    version: "1.4.2",
-    date: "2026-07-12",
-    items: [
-      "同步上传遇到本机数据较少时，确认操作改为取消或仍然上传，不再混入 WebDAV 恢复流程。",
-    ],
-  },
-  {
-    version: "1.4.1",
-    date: "2026-07-12",
-    items: [
-      "移动单条或多条收藏时，可直接新建目标分组并完成移动。",
-    ],
-  },
-  {
-    version: "1.4.0",
-    date: "2026-07-12",
-    items: [
-      "WebDAV 恢复前自动保存本机保护副本，并支持撤销最近一次恢复。",
-      "WebDAV 备份列表显示文件大小及相对前一备份的新增、删除数量。",
-      "回收站支持永不、7 天、30 天或 90 天自动清理。",
-      "分组多选模式支持批量移动收藏。",
-      "主菜单重新分层为新建分组、回收站、WebDAV、显示设置和关于与更新。",
-    ],
-  },
-  {
-    version: "1.3.1",
-    date: "2026-07-12",
-    items: [
-      "WebDAV 菜单将“恢复当前 WebDAV”和“历史版本”合并为“恢复”。",
-      "恢复页面只保留当前本机与 WebDAV 备份，点击备份即可选择恢复。",
-      "恢复成功后直接提示完成，不再询问是否上传为 WebDAV 最新数据。",
-    ],
-  },
-  {
-    version: "1.3.0",
-    date: "2026-07-12",
+    summary: "搜索、移动与回收站",
     items: [
       "新增主界面域名搜索和分组内搜索。",
       "收藏支持快速移动到其他分组。",
       "删除的普通收藏和分组内容会进入回收站，可恢复、永久删除或清空。",
-      "中尺寸小组件标题可打开管理面板，并显示最近收藏所属分组。",
+      "WebDAV 菜单将恢复入口合并为一个恢复页面。",
+      "中尺寸小组件可直接打开管理面板，并显示最近收藏所属分组。",
     ],
   },
   {
-    version: "1.2.13",
-    date: "2026-07-12",
+    version: "1.2.x",
+    date: "2026-06-15 — 2026-07-12",
+    summary: "基础同步、组件与版本记录",
     items: [
-      "修复点击主屏幕小组件会进入代码编辑器的问题，现在会直接运行并打开收藏面板。",
-    ],
-  },
-  {
-    version: "1.2.12",
-    date: "2026-07-12",
-    items: [
-      "新增主屏幕小组件，显示收藏数量并可点按直接打开标签页收藏面板。",
-      "小组件支持小号和中号布局，中号会额外显示分组与星标数量。",
-    ],
-  },
-  {
-    version: "1.2.9",
-    date: "2026-07-10",
-    items: [
-      "Safari 收藏按钮改为立即创建，不再等待 DOMContentLoaded。",
-      "增强按钮和样式健康检查，网页替换 head 或关键节点后会轻量恢复。",
-    ],
-  },
-  {
-    version: "1.2.8",
-    date: "2026-07-10",
-    items: [
-      "历史快照删除提示明确说明会从 WebDAV 永久删除。",
-      "修复多选历史版本后需要多次点击才显示删除确认的问题。",
-    ],
-  },
-  {
-    version: "1.2.7",
-    date: "2026-07-09",
-    items: [
-      "删除 iCloud / GitHub 两种同步方式，改为 WebDAV 同步。",
-      "新增类似设置页的 WebDAV 备份表单：URL、备份目录、用户名、密码/Token、最大备份数。",
-      "上传前会为远端当前数据保存 WebDAV 快照，并保留疑似误删保护。",
-    ],
-  },
-  {
-    version: "1.2.6",
-    date: "2026-07-05",
-    items: [
-      "Safari 收藏按钮已同步为包内维护源 v0.2.15。",
-      "远程更新 Tab 时会一并带上最新 tabs-saver-button.user.js，首次打开 Tab 会自动安装/更新到 Safari 浏览器脚本目录。",
-    ],
-  },
-  {
-    version: "1.2.5",
-    date: "2026-06-29",
-    items: [
-      "GitHub/iCloud 历史版本页支持多选删除。",
-      "历史快照页右上角新增多选按钮，底部可全选、查看已选数量并批量删除。",
-      "刷新历史列表时会自动清理已不存在的选择，避免误操作当前本机或当前云端版本。",
-    ],
-  },
-  {
-    version: "1.2.4",
-    date: "2026-06-15",
-    items: [
-      "新增「版本更新」入口，可查看所有版本更新记录。",
-      "版本更新列表支持点开单个版本查看详细内容。",
-      "入口放在右上角菜单的「使用说明」下面。",
-    ],
-  },
-  {
-    version: "1.2.3",
-    date: "2026-06-15",
-    items: [
-      "历史版本恢复流程增加真正的取消：点版本后先确认恢复，恢复后再选择是否上传为最新。",
-      "GitHub/iCloud 历史快照行新增删除按钮。",
-      "当前本机、当前云端/iCloud 只允许恢复，不允许删除。",
-      "保留 GitHub/iCloud 完整历史列表页和自动快照。",
-    ],
-  },
-  {
-    version: "1.2.2",
-    date: "2026-06-15",
-    items: [
-      "GitHub/iCloud 菜单统一为：上传、恢复当前、历史版本。",
-      "GitHub/iCloud 历史版本改为完整列表页，可直接选择某个版本。",
-      "iCloud 上传前也会保存历史快照，支持从 iCloud 历史恢复。",
-      "历史版本恢复到本机后，可选择立即上传为对应云端最新。",
-      "保留 GitHub 冲突选择、疑似误删保护和同步锁。",
-    ],
-  },
-  {
-    version: "1.2.1",
-    date: "2026-06-15",
-    items: [
-      "GitHub 同步上传前会保存云端历史快照，误覆盖后也能找回。",
-      "本机数据明显少于云端时会暂停上传，防止误删覆盖备份。",
-      "遇到 GitHub 409 冲突时，可选择保留本机覆盖云端、恢复云端或取消。",
-      "GitHub 菜单新增恢复历史版本。",
-      "新增同步锁，减少自动同步和手动同步同时运行导致的冲突。",
-    ],
-  },
-  {
-    version: "1.2.0",
-    date: "2026-06-15",
-    items: [
-      "新增 iCloud 与 GitHub 双通道同步。",
-      "新增自动同步频率设置。",
-      "新增同步状态显示和手动上传/恢复入口。",
+      "同步方式从 iCloud 与 GitHub 逐步迁移为 WebDAV，并保留历史快照、冲突保护和误删保护。",
+      "新增主屏幕小组件，支持小号和中号布局并可直接打开收藏面板。",
+      "Safari 收藏按钮纳入脚本包统一安装与更新，并增强页面加载和 SPA 场景的稳定性。",
+      "历史版本支持查看、恢复、单个删除和批量删除。",
+      "新增版本更新入口，可查看各阶段的详细更新内容。",
     ],
   },
 ]
@@ -918,7 +777,7 @@ function ChangelogView() {
 
   async function showEntry(entry: ChangelogEntry) {
     await Dialog.alert({
-      title: `v${entry.version} 更新内容`,
+      title: `v${entry.version} · ${entry.summary}`,
       message: entry.items.map(item => `• ${item}`).join("\n"),
     })
   }
@@ -932,7 +791,7 @@ function ChangelogView() {
           cancellationAction: <Button title="关闭" action={() => dismiss()} />,
         }}
       >
-        <Section footer={<Text>点击版本查看详细更新内容。</Text>}>
+        <Section footer={<Text>历史记录已按功能阶段合并，点击查看详细内容。</Text>}>
           {CHANGELOG_ENTRIES.map((entry: ChangelogEntry) => (
             <Button key={entry.version} action={() => showEntry(entry)} buttonStyle="plain">
               <HStack>
@@ -945,8 +804,11 @@ function ChangelogView() {
                   <Text font="body" foregroundStyle="label">
                     {`v${entry.version}${entry.version === APP_VERSION ? " · 当前版本" : ""}`}
                   </Text>
-                  <Text font="footnote" foregroundStyle="secondaryLabel">
-                    {`${entry.date} · ${entry.items.length} 项更新`}
+                  <Text font="footnote" foregroundStyle="secondaryLabel" lineLimit={1}>
+                    {entry.summary}
+                  </Text>
+                  <Text font="caption" foregroundStyle="tertiaryLabel">
+                    {`${entry.date} · ${entry.items.length} 项`}
                   </Text>
                 </VStack>
                 <Spacer />
