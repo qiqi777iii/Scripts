@@ -25,7 +25,7 @@ exports.ReloadIntent = scripting_1.AppIntentManager.register({
         // 点击小组件时先主动拉取最新数据并写入缓存，再请求 WidgetKit 刷新展示。
         // 即使实时拉取失败，也继续触发系统刷新，保持原有兜底逻辑。
         try {
-            yield withTimeout(api_1.api.getUsage(), 12000);
+            yield withTimeout(api_1.api.getAllUsage(), 12000);
         }
         catch (_a) {
             // ignore

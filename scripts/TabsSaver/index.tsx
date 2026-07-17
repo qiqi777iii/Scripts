@@ -130,7 +130,8 @@ type DaySection = { key: number; label: string; items: Bookmark[] }
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
-const APP_VERSION = "2.0.7"
+const SHOW_FAVORITES_KEY = "tab.showFavorites"
+const APP_VERSION = "2.2.1"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = {
   version: string
@@ -139,6 +140,14 @@ type ChangelogEntry = {
   items: string[]
 }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "2.2.1",
+    date: "2026-07-17",
+    summary: "支持隐藏顶部收藏入口",
+    items: [
+      "右上角菜单新增显示或隐藏顶部收藏入口的开关，并会记住当前选择。",
+    ],
+  },
   {
     version: "2.0.5",
     date: "2026-07-16",
@@ -227,7 +236,7 @@ const GUIDE_MESSAGE = [
   "• 也可以用系统分享菜单，把链接分享到「标签页收藏」来添加。",
   "• 回到本 App 查看：收藏按分组和收藏夹整理，并按日期分段。点一下用 Safari 打开，长按可复制链接或删除。",
   "• 在分组里：左滑删除，右滑加星标到「收藏」。",
-  "• 右上角「…」菜单：新建分组、回收站、WebDAV 同步和关于与更新。长按任意分组可排序分组。点击列表上方的同步状态也能立即同步。",
+  "• 右上角「…」菜单：显示或隐藏顶部收藏、新建分组、回收站、WebDAV 同步和关于与更新。长按任意分组可排序分组。点击列表上方的同步状态也能立即同步。",
 ].join("\n\n")
 
 async function showGuide() {
@@ -333,6 +342,9 @@ function MainView() {
   const dismiss = Navigation.useDismiss()
   const [store, setStore] = useState<Store>({ version: 1, groups: [] })
   const [loading, setLoading] = useState(true)
+  const [showFavorites, setShowFavorites] = useState(
+    () => Storage.get<boolean>(SHOW_FAVORITES_KEY) !== false,
+  )
   const [sorting, setSorting] = useState(false)
   const editMode = useObservable(() => EditMode.inactive())
   const [sortList, setSortList] = useState<Group[]>([])
@@ -453,6 +465,12 @@ function MainView() {
     applyGroupOrder(store, remaining.map(g => g.id))
     await saveStore(store)
     setStore({ ...store })
+  }
+
+  function toggleFavoritesVisibility() {
+    const next = !showFavorites
+    Storage.set(SHOW_FAVORITES_KEY, next)
+    setShowFavorites(next)
   }
 
   async function onNewGroup() {
@@ -588,6 +606,11 @@ function MainView() {
               }
             >
               <Button
+                title={showFavorites ? "隐藏顶部收藏" : "显示顶部收藏"}
+                systemImage={showFavorites ? "eye.slash" : "eye"}
+                action={toggleFavoritesVisibility}
+              />
+              <Button
                 title="新建分组"
                 systemImage="folder.badge.plus"
                 action={onNewGroup}
@@ -669,16 +692,18 @@ function MainView() {
           </Section>
         ) : (
           <>
-            <Section>
-              <NavigationLink destination={<FavoritesView />}>
-                <HStack>
-                  <Image systemName="star.fill" foregroundStyle="systemYellow" />
-                  <Text>收藏</Text>
-                  <Spacer />
-                  <Text foregroundStyle="secondaryLabel">{favCount}</Text>
-                </HStack>
-              </NavigationLink>
-            </Section>
+            {showFavorites ? (
+              <Section>
+                <NavigationLink destination={<FavoritesView />}>
+                  <HStack>
+                    <Image systemName="star.fill" foregroundStyle="systemYellow" />
+                    <Text>收藏</Text>
+                    <Spacer />
+                    <Text foregroundStyle="secondaryLabel">{favCount}</Text>
+                  </HStack>
+                </NavigationLink>
+              </Section>
+            ) : null}
             <Section
               header={
                 <HStack>

@@ -11,51 +11,86 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.api = void 0;
 const scripting_1 = require("scripting");
-const LOGIN_FLAG = "codex_logged_in";
-const CACHE_KEY = "codex_usage_cache";
-const COOKIE_KEY = "codex_saved_cookies";
-const TOKEN_KEY = "codex_access_token";
+const LEGACY = {
+    login: "codex_logged_in",
+    cache: "codex_usage_cache",
+    cookies: "codex_saved_cookies",
+    token: "codex_access_token",
+};
+const MIGRATED_KEY = "codex_accounts_v2_migrated";
+const SLOTS = [1, 2];
+function key(slot, name) {
+    return `codex_account_${slot}_${name}`;
+}
 class API {
     constructor() {
         this.base = "https://chatgpt.com";
+        this.migrateLegacyAccount();
     }
-    /** 是否曾经成功登录过(用于页面提示) */
-    get hasLogin() {
-        return Storage.get(LOGIN_FLAG) === true;
-    }
-    markLogin(v) {
-        Storage.set(LOGIN_FLAG, v);
-    }
-    /** 读取上一次成功的缓存用量（供小组件秒出） */
-    getCached() {
-        var _a;
-        return (_a = Storage.get(CACHE_KEY)) !== null && _a !== void 0 ? _a : null;
-    }
-    writeCache(usage) {
-        Storage.set(CACHE_KEY, { usage, ts: Date.now() });
-    }
-    getSavedToken() {
-        return Storage.get(TOKEN_KEY) || "";
-    }
-    saveToken(token) {
+    migrateLegacyAccount() {
+        if (Storage.get(MIGRATED_KEY) === true)
+            return;
+        const token = Storage.get(LEGACY.token) || "";
+        const cache = Storage.get(LEGACY.cache) || null;
+        const cookies = Storage.get(LEGACY.cookies) || [];
         if (token)
-            Storage.set(TOKEN_KEY, token);
+            Storage.set(key(1, "token"), token);
+        if (cache)
+            Storage.set(key(1, "cache"), cache);
+        if (cookies.length)
+            Storage.set(key(1, "cookies"), cookies);
+        Storage.set(key(1, "logged_in"), Storage.get(LEGACY.login) === true || !!token);
+        Storage.set(MIGRATED_KEY, true);
+    }
+    validSlot(slot) {
+        return slot === 2 ? 2 : 1;
+    }
+    hasLogin(slot = 1) {
+        slot = this.validSlot(slot);
+        return Storage.get(key(slot, "logged_in")) === true && !!this.getSavedToken(slot);
+    }
+    markLogin(slot, value) {
+        Storage.set(key(this.validSlot(slot), "logged_in"), value);
+    }
+    getCached(slot = 1) {
+        return Storage.get(key(this.validSlot(slot), "cache")) || null;
+    }
+    writeCache(slot, usage) {
+        Storage.set(key(this.validSlot(slot), "cache"), { usage, ts: Date.now() });
+    }
+    getSavedToken(slot = 1) {
+        return Storage.get(key(this.validSlot(slot), "token")) || "";
+    }
+    saveToken(slot, token) {
+        Storage.set(key(this.validSlot(slot), "token"), token || "");
+    }
+    getSavedCookies(slot = 1) {
+        return Storage.get(key(this.validSlot(slot), "cookies")) || [];
+    }
+    getAccountStates() {
+        return SLOTS.map((slot) => {
+            const cached = this.getCached(slot);
+            return {
+                slot,
+                configured: !!this.getSavedToken(slot),
+                usage: cached ? cached.usage : null,
+                ts: cached ? cached.ts : null,
+            };
+        });
     }
     getUsageByToken(token) {
         return __awaiter(this, void 0, void 0, function* () {
-            const usage = yield (0, scripting_1.fetch)(`${this.base}/backend-api/wham/usage`, {
-                headers: {
-                    accept: "application/json",
-                    authorization: `Bearer ${token}`,
-                },
-            }).then((r) => {
-                if (r.status === 401 || r.status === 403) {
-                    const err = new Error("TOKEN_INVALID");
-                    err.tokenInvalid = true;
-                    throw err;
-                }
-                return r.json();
+            const response = yield (0, scripting_1.fetch)(`${this.base}/backend-api/wham/usage`, {
+                headers: { accept: "application/json", authorization: `Bearer ${token}` },
             });
+            if (response.status === 401 || response.status === 403) {
+                const err = new Error("TOKEN_INVALID");
+                err.tokenInvalid = true;
+                throw err;
+            }
+            if (!response.ok)
+                throw new Error(`HTTP_${response.status}`);
+            const usage = yield response.json();
             const rl = usage.rate_limit || {};
             return {
                 email: usage.email || "",
@@ -67,84 +102,76 @@ class API {
             };
         });
     }
-    getSavedCookies() {
-        var _a;
-        return (_a = Storage.get(COOKIE_KEY)) !== null && _a !== void 0 ? _a : [];
-    }
-    restoreCookies(wv) {
+    getUsage(slot = 1) {
         return __awaiter(this, void 0, void 0, function* () {
-            const cookies = this.getSavedCookies();
-            for (const c of cookies) {
-                try {
-                    yield wv.setCookie(Object.assign(Object.assign({}, c), { expiresDate: c.expiresDate ? new Date(c.expiresDate) : null }));
+            slot = this.validSlot(slot);
+            const token = this.getSavedToken(slot);
+            if (!token) {
+                this.markLogin(slot, false);
+                const err = new Error("NEED_LOGIN");
+                err.needLogin = true;
+                err.slot = slot;
+                throw err;
+            }
+            try {
+                const usage = yield this.getUsageByToken(token);
+                this.markLogin(slot, true);
+                this.writeCache(slot, usage);
+                return usage;
+            }
+            catch (e) {
+                if (e && e.tokenInvalid) {
+                    this.saveToken(slot, "");
+                    this.markLogin(slot, false);
+                    const err = new Error("NEED_LOGIN");
+                    err.needLogin = true;
+                    err.slot = slot;
+                    throw err;
                 }
-                catch (_a) {
-                    // ignore invalid / expired cookie
-                }
+                throw e;
             }
         });
     }
-    saveCookies(wv) {
+    getAllUsage() {
+        return __awaiter(this, void 0, void 0, function* () {
+            return yield Promise.all(SLOTS.map((slot) => __awaiter(this, void 0, void 0, function* () {
+                if (!this.getSavedToken(slot))
+                    return { slot, configured: false, usage: null, error: null };
+                try {
+                    const usage = yield this.getUsage(slot);
+                    return { slot, configured: true, usage, error: null };
+                }
+                catch (error) {
+                    return { slot, configured: !!this.getSavedToken(slot), usage: this.getCached(slot)?.usage || null, error };
+                }
+            })));
+        });
+    }
+    saveCookies(wv, slot) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
                 const cookies = yield wv.getCookies(this.base);
-                Storage.set(COOKIE_KEY, cookies.map((c) => (Object.assign(Object.assign({}, c), { expiresDate: c.expiresDate ? new Date(c.expiresDate).toISOString() : null }))));
+                Storage.set(key(this.validSlot(slot), "cookies"), cookies.map((c) => (Object.assign(Object.assign({}, c), { expiresDate: c.expiresDate ? new Date(c.expiresDate).toISOString() : null }))));
             }
-            catch (_a) {
-                // ignore
-            }
-        });
-    }
-    /**
-     * 拉取 Codex(ChatGPT) 用量。通过隐藏的 WebView 加载 chatgpt.com 并在页面内 fetch 内部接口。
-     * 若未登录会抛出带有 needLogin 标记的错误。
-     */
-    getUsage() {
-        return __awaiter(this, void 0, void 0, function* () {
-            // 只走快路径：使用已保存 accessToken 直接请求 usage。
-            // token 缺失/失效时直接要求重新登录，不在后台走 WebView 慢刷新。
-            const savedToken = this.getSavedToken();
-            if (!savedToken) {
-                this.markLogin(false);
-                const err = new Error("NEED_LOGIN");
-                err.needLogin = true;
-                throw err;
-            }
-            try {
-                const usage = yield this.getUsageByToken(savedToken);
-                this.markLogin(true);
-                this.writeCache(usage);
-                return usage;
-            }
-            catch (_a) {
-                Storage.set(TOKEN_KEY, "");
-                this.markLogin(false);
-                const err = new Error("NEED_LOGIN");
-                err.needLogin = true;
-                throw err;
-            }
+            catch (_) { }
         });
     }
     readSessionToken(wv) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
                 const raw = yield wv.evaluateJavaScript(`
-        return (async () => {
-          try {
-            const s = await fetch('/api/auth/session', { credentials: 'include' }).then(r => r.json());
-            return JSON.stringify({ token: s.accessToken || '', email: s.user && s.user.email || '' });
-          } catch (e) {
-            return JSON.stringify({ token: '', error: String(e) });
-          }
-        })();
-      `);
-                const data = JSON.parse(raw);
-                return data.token || "";
+          return (async () => {
+            try {
+              const s = await fetch('/api/auth/session', { credentials: 'include' }).then(r => r.json());
+              return JSON.stringify({ token: s.accessToken || '' });
+            } catch (e) { return JSON.stringify({ token: '', error: String(e) }); }
+          })();
+        `);
+                return JSON.parse(raw).token || "";
             }
-            catch (_a) {
-                // ignore
+            catch (_) {
+                return "";
             }
-            return "";
         });
     }
     clearServiceWebCookies() {
@@ -154,32 +181,21 @@ class API {
                 const deleted = new Set();
                 for (const url of urls) {
                     let cookies = [];
-                    try {
-                        cookies = yield wv.getCookies(url);
-                    }
-                    catch (_a) {
-                        cookies = [];
-                    }
+                    try { cookies = yield wv.getCookies(url); }
+                    catch (_) { cookies = []; }
                     for (const c of cookies) {
-                        const key = `${c.name}|${c.domain}|${c.path}`;
-                        if (deleted.has(key))
+                        const id = `${c.name}|${c.domain}|${c.path}`;
+                        if (deleted.has(id))
                             continue;
-                        deleted.add(key);
-                        try {
-                            yield wv.deleteCookie({ name: c.name, domain: c.domain, path: c.path });
-                        }
-                        catch (_b) {
-                            // ignore
-                        }
+                        deleted.add(id);
+                        try { yield wv.deleteCookie({ name: c.name, domain: c.domain, path: c.path }); }
+                        catch (_) { }
                     }
                 }
             }
-            finally {
-                wv.dispose();
-            }
+            finally { wv.dispose(); }
         });
     }
-    /** 只退出 WebView/内置浏览器的网页登录态，保留本地保存的 token/cookie/cache。 */
     clearWebLoginState() {
         return __awaiter(this, void 0, void 0, function* () {
             yield this.clearServiceWebCookies([
@@ -190,103 +206,47 @@ class API {
             ]);
         });
     }
-    /** 彻底清除本地保存的 token/cookie/cache，用于完全退出，不用于切换账号。 */
-    clearSavedAccount() {
+    clearSavedAccount(slot) {
         return __awaiter(this, void 0, void 0, function* () {
-            Storage.set(TOKEN_KEY, "");
-            Storage.set(COOKIE_KEY, []);
-            Storage.set(CACHE_KEY, null);
-            this.markLogin(false);
-            yield this.clearWebLoginState();
+            slot = this.validSlot(slot);
+            this.saveToken(slot, "");
+            Storage.set(key(slot, "cookies"), []);
+            Storage.set(key(slot, "cache"), null);
+            this.markLogin(slot, false);
         });
     }
-    switchAccount() {
+    presentLogin(slot = 1) {
         return __awaiter(this, void 0, void 0, function* () {
-            var _a, _b;
-            // 保留旧 token/cookie/cache，只有新账号登录成功并能拉到用量后才覆盖。
-            const oldToken = Storage.get(TOKEN_KEY) || "";
-            const oldCookies = (_a = Storage.get(COOKIE_KEY)) !== null && _a !== void 0 ? _a : [];
-            const oldCache = (_b = Storage.get(CACHE_KEY)) !== null && _b !== void 0 ? _b : null;
-            const oldLogin = this.hasLogin;
+            slot = this.validSlot(slot);
+            const oldToken = this.getSavedToken(slot);
+            const oldCookies = this.getSavedCookies(slot);
+            const oldCache = this.getCached(slot);
+            const oldLogin = this.hasLogin(slot);
             const wv = new WebViewController();
             try {
                 yield wv.clearAllCookies();
                 yield wv.loadURL(`${this.base}/auth/login`);
-                yield wv.present({ fullscreen: true, navigationTitle: "切换 ChatGPT 账号" });
+                yield wv.present({ fullscreen: true, navigationTitle: `登录账号 ${slot}` });
                 yield wv.loadURL(`${this.base}/`);
                 yield wv.waitForLoad();
-                yield this.saveCookies(wv);
                 const token = yield this.readSessionToken(wv);
-                if (!token) {
-                    Storage.set(TOKEN_KEY, oldToken);
-                    Storage.set(COOKIE_KEY, oldCookies);
-                    Storage.set(CACHE_KEY, oldCache);
-                    this.markLogin(oldLogin);
+                if (!token)
                     return false;
-                }
-                Storage.set(TOKEN_KEY, token);
+                this.saveToken(slot, token);
+                yield this.saveCookies(wv, slot);
                 try {
-                    const u = yield this.getUsage();
-                    this.markLogin(!!u.email || !!u.rate_limit.primary_window);
+                    yield this.getUsage(slot);
                     return true;
                 }
-                catch (_c) {
-                    // 新 token 检测失败：恢复旧凭证，避免旧账号也丢失。
-                    Storage.set(TOKEN_KEY, oldToken);
-                    Storage.set(COOKIE_KEY, oldCookies);
-                    Storage.set(CACHE_KEY, oldCache);
-                    this.markLogin(oldLogin);
+                catch (_) {
+                    this.saveToken(slot, oldToken);
+                    Storage.set(key(slot, "cookies"), oldCookies);
+                    Storage.set(key(slot, "cache"), oldCache);
+                    this.markLogin(slot, oldLogin);
                     return false;
                 }
             }
-            finally {
-                wv.dispose();
-            }
-        });
-    }
-    /**
-     * 弹出 chatgpt.com 登录页，登录成功后 Cookie 会保存在共享的 WebView data store 中。
-     */
-    presentLogin() {
-        return __awaiter(this, void 0, void 0, function* () {
-            var _a, _b;
-            const oldToken = Storage.get(TOKEN_KEY) || "";
-            const oldCookies = (_a = Storage.get(COOKIE_KEY)) !== null && _a !== void 0 ? _a : [];
-            const oldCache = (_b = Storage.get(CACHE_KEY)) !== null && _b !== void 0 ? _b : null;
-            const oldLogin = this.hasLogin;
-            const wv = new WebViewController();
-            try {
-                yield wv.loadURL(`${this.base}/auth/login`);
-                yield wv.present({ fullscreen: true, navigationTitle: "登录 ChatGPT" });
-                yield wv.loadURL(`${this.base}/`);
-                yield wv.waitForLoad();
-                yield this.saveCookies(wv);
-                const token = yield this.readSessionToken(wv);
-                if (!token) {
-                    Storage.set(TOKEN_KEY, oldToken);
-                    Storage.set(COOKIE_KEY, oldCookies);
-                    Storage.set(CACHE_KEY, oldCache);
-                    this.markLogin(oldLogin);
-                    return false;
-                }
-                Storage.set(TOKEN_KEY, token);
-                // 关闭后用新 token 快速检测并写入缓存
-                try {
-                    const u = yield this.getUsage();
-                    this.markLogin(!!u.email || !!u.rate_limit.primary_window);
-                    return true;
-                }
-                catch (_c) {
-                    Storage.set(TOKEN_KEY, oldToken);
-                    Storage.set(COOKIE_KEY, oldCookies);
-                    Storage.set(CACHE_KEY, oldCache);
-                    this.markLogin(oldLogin);
-                    return false;
-                }
-            }
-            finally {
-                wv.dispose();
-            }
+            finally { wv.dispose(); }
         });
     }
 }

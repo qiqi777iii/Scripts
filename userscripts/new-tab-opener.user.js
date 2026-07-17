@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.5
+// @version      1.2.9
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -10,7 +10,7 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.addValueChangeListener
-// @run-at       document-end
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
@@ -206,11 +206,21 @@
         return previewLink ? { card, preview, previewLink } : null;
     }
 
+    function isMissAvDetailMetadataLink(a, url) {
+        if (!a || !/^\/(?:dm\d+\/)?[^/]+\/(?:genres|series|makers|directors|labels)\//i.test(url.pathname)) return false;
+        const row = a.closest?.('div.text-secondary');
+        if (!row) return false;
+        const label = (row.querySelector(':scope > span')?.textContent || '').replace(/\s+/g, '').replace(/[：:]+$/, '');
+        return /^(?:类型|類型|系列|发行商|發行商|导演|導演|标签|標籤|標簽)$/.test(label);
+    }
+
     function shouldBackgroundOpenOnMissAv(a, url) {
         if (!/(^|\.)missav\./i.test(location.hostname)) return true;
 
-        // MissAV 只让影片卡片进入后台标签页；站内导航、筛选、排序、翻页、
-        // 语言切换、收藏、历史、播放列表和登录等链接维持网站原本的当前页行为。
+        // 详情页中的类型、系列、发行商、导演和标签链接也进入后台标签页；
+        // 其余站内导航、筛选、排序、翻页、语言切换与账户操作维持网站原本行为。
+        if (isMissAvDetailMetadataLink(a, url)) return true;
+
         const context = getMissAvPreviewContext(a);
         if (!context) return false;
 
@@ -223,7 +233,7 @@
 
     function shouldBackgroundOpenOnCuratedVideoSite(url) {
         const site = getSharedSiteKey(location.hostname);
-        if (!['rule34video.com', 'spankbang.com', 'eporner.com', 'xhamster.com'].includes(site)) return null;
+        if (!['rule34video.com', 'spankbang.com', 'eporner.com', 'xhamster.com', 'pornhub.com'].includes(site)) return null;
         if (getSharedSiteKey(url.hostname) !== site) return false;
 
         // 这些站只让具体视频详情页进入后台；分类、标签、作者、频道、搜索、
@@ -231,6 +241,10 @@
         if (site === 'rule34video.com') return /^\/video\/\d+(?:\/|$)/i.test(url.pathname);
         if (site === 'spankbang.com') return /^\/[a-z0-9]+\/video(?:\/|$)/i.test(url.pathname);
         if (site === 'xhamster.com') return /^\/videos\/[^/]+(?:\/|$)/i.test(url.pathname);
+        if (site === 'pornhub.com') {
+            return /^\/view_video\.php$/i.test(url.pathname) && Boolean(url.searchParams.get('viewkey')) ||
+                /^\/shorties\/[^/]+(?:\/|$)/i.test(url.pathname);
+        }
         return /^\/video-[^/]+(?:\/|$)/i.test(url.pathname) || /^\/hd-porn\/[a-z0-9]+(?:\/|$)/i.test(url.pathname);
     }
 
@@ -405,13 +419,17 @@
     }
 
     function getBackgroundOpenUrl(a) {
-        if (!enabled || !a || a.dataset.tbInternalOpen === 'true' || isPaginationLink(a) || isExplicitInteractiveLink(a)) return null;
+        if (!enabled || !a || a.dataset.tbInternalOpen === 'true' || isPaginationLink(a)) return null;
         const rawHref = (a.getAttribute('href') || '').trim();
         if (!rawHref || rawHref[0] === '#') return null;
         let url;
         try { url = new URL(rawHref, document.baseURI); } catch (_) { return null; }
         if (!/^https?:$/i.test(url.protocol) || url.username || url.password) return null;
-        if (!shouldBackgroundOpenForSite(a, url)) return null;
+        const curatedVideoResult = shouldBackgroundOpenOnCuratedVideoSite(url);
+        // Pornhub 的视频卡片带有仅写入来源 Cookie 的 onclick；它不是交互操作，
+        // 需要允许脚本接管。其余站点仍保留原有的交互链接保护。
+        if (isExplicitInteractiveLink(a) && !(getSharedSiteKey(location.hostname) === 'pornhub.com' && curatedVideoResult === true)) return null;
+        if (curatedVideoResult === null ? !shouldBackgroundOpenOnMissAv(a, url) : !curatedVideoResult) return null;
         if (isSensitiveActionLink(a, url)) return null;
         const current = new URL(location.href);
         if (url.origin === current.origin && url.pathname === current.pathname && url.search === current.search && url.hash) return null;
@@ -441,7 +459,7 @@
         // 这些站会在卡片或 document 的冒泡阶段追加当前页跳转或广告弹窗，
         // 所以视频链接要先接管；封面预览脚本存在时，封面点击交给它处理，
         // 标题点击仍直接后台打开。
-        if (!['rule34video.com', 'spankbang.com', 'eporner.com', 'xhamster.com'].includes(site) || !isPlainPrimaryClick(e)) return;
+        if (!['rule34video.com', 'spankbang.com', 'eporner.com', 'xhamster.com', 'pornhub.com'].includes(site) || !isPlainPrimaryClick(e)) return;
         if (toolbar?.contains(e.target) || isCoverPreviewTarget(e.target, site)) return;
         const a = findLinkTarget(e.target);
         if (!a || a.dataset.tbInternalOpen === 'true') return;
@@ -491,7 +509,10 @@
         style.id = '__tb_style__';
         style.textContent = `
 #__tb__{position:fixed;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top,right,bottom,transform;}
-#__tb_btn__{width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:999px 0 0 999px;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity .2s,background .2s,color .2s,box-shadow .2s;}
+#__tb_btn__{width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:999px;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity .2s,background .2s,color .2s,box-shadow .2s;}
+#__tb_btn__[data-connected-left="true"][data-connected-right="true"]{border-radius:0;}
+#__tb_btn__[data-connected-left="true"][data-connected-right="false"]{border-radius:0 999px 999px 0;}
+#__tb_btn__[data-connected-left="false"][data-connected-right="true"]{border-radius:999px 0 0 999px;}
 #__tb_btn__[data-enabled="true"]{background:rgba(242,242,247,.92);color:#0A84FF;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);}
 #__tb_btn__ svg{pointer-events:none;stroke:currentColor;}
 #__tb_btn__:active{transform:none;opacity:.94;background:rgba(229,229,234,.96);}
@@ -564,6 +585,28 @@
 
     // 悬浮工具栏保留兼容 DOM id：链接按钮直接贴在它左侧，形成一条视觉组合栏。
     const FLOATING_TOOLBAR_ID = 'universal-pagination-floating-menu';
+    const BOOKMARK_TOOLBAR_ID = 'qiqi-tab-save-toolbar';
+
+    function controlsAreAdjacent(leftControl, rightControl) {
+        if (!leftControl?.isConnected || !rightControl?.isConnected) return false;
+        const leftRect = leftControl.getBoundingClientRect();
+        const rightRect = rightControl.getBoundingClientRect();
+        return leftRect.width > 0 && leftRect.height > 0 && rightRect.width > 0 && rightRect.height > 0 &&
+            Math.abs(leftRect.right - rightRect.left) <= 1.5 && Math.abs(leftRect.top - rightRect.top) <= 1.5;
+    }
+
+    function refreshConnectedVisual() {
+        if (!linkBtn?.isConnected || !toolbar?.isConnected) return;
+        const bookmarkToolbar = document.getElementById(BOOKMARK_TOOLBAR_ID);
+        const floatingToolbar = document.getElementById(FLOATING_TOOLBAR_ID);
+        const connectedLeft = controlsAreAdjacent(bookmarkToolbar, toolbar);
+        const connectedRight = controlsAreAdjacent(toolbar, floatingToolbar);
+        linkBtn.dataset.connectedLeft = connectedLeft ? 'true' : 'false';
+        linkBtn.dataset.connectedRight = connectedRight ? 'true' : 'false';
+        const bookmarkButton = document.getElementById('qiqi-tab-save-button');
+        if (bookmarkButton) bookmarkButton.dataset.connectedRight = connectedLeft ? 'true' : 'false';
+        if (floatingToolbar) floatingToolbar.dataset.connectedLeft = connectedRight ? 'true' : 'false';
+    }
 
     function observeNeighbor(neighbor) {
         if (observedNeighbor === neighbor) return;
@@ -644,6 +687,8 @@
         linkBtn = document.createElement('div');
         linkBtn.id = '__tb_btn__';
         linkBtn.innerHTML = linkSVG();
+        linkBtn.dataset.connectedLeft = 'false';
+        linkBtn.dataset.connectedRight = 'false';
         toolbar.appendChild(linkBtn);
         isolateFloatingUi(toolbar);
         parent.appendChild(toolbar);
@@ -753,7 +798,7 @@
     }
 
     function mutationTouchesFloatingUi(mutation) {
-        const selector = '#__tb__, #__tb_btn__, #__tb_style__, #' + FLOATING_TOOLBAR_ID;
+        const selector = '#__tb__, #__tb_btn__, #__tb_style__, #' + FLOATING_TOOLBAR_ID + ', #' + BOOKMARK_TOOLBAR_ID;
         const nodes = Array.from(mutation.addedNodes).concat(Array.from(mutation.removedNodes));
         return nodes.some(function (node) {
             if (!(node instanceof Element)) return false;
@@ -783,6 +828,7 @@
             if (!toolbar || dragging) return;
             if (savedPosition) applySavedPosition();
             else applyDefaultPosition();
+            refreshConnectedVisual();
             // iOS Safari 偶发 fixed 图层滚动后不重绘；重写 transform 触发合成层刷新。
             toolbar.style.transform = 'translate3d(0,0,0)';
         });

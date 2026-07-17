@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.4.0
+// @version      1.4.5
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
-// @run-at       document-end
+// @run-at       document-start
 // @grant        GM.log
 // @grant        GM.closeTab
 // @grant        GM.openInTab
@@ -23,8 +23,13 @@
   const STYLE_ID = `${TOOLBAR_ID}-style`;
   const GROUP_DRAG_EVENT = "qiqi-floating-toolbar-group-drag";
   const BOUND_LINK_ID = "__tb__";
+  const BOOKMARK_TOOLBAR_ID = "qiqi-tab-save-toolbar";
+  const PAGE_NAVIGATION_ID = "qiqi-floating-page-navigation";
+  const VIDEO_FULLSCREEN_ID = "qiqi-video-fullscreen";
   const ITEM_SIZE = 35;
   const BOUND_CONTROL_SIZE = 35;
+  const PAGE_NAVIGATION_WIDTH = 70;
+  const PAGE_NAVIGATION_RIGHT_GAP = 16;
   const SAFE_BOTTOM_GAP = 40;
   const DEFAULT_BOTTOM_GAP = 28;
   const DEFAULT_RIGHT_GAP = 60;
@@ -69,11 +74,28 @@
     };
   }
 
+  function controlIsVisible(control) {
+    if (!control?.isConnected) return false;
+    const style = getComputedStyle(control);
+    const rect = control.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+  }
+
+  function rightAccessoryWidth() {
+    const pageNavigationWidth = document.getElementById(PAGE_NAVIGATION_ID) ? PAGE_NAVIGATION_WIDTH : 0;
+    const fullscreenWidth = controlIsVisible(document.getElementById(VIDEO_FULLSCREEN_ID)) ? ITEM_SIZE : 0;
+    return pageNavigationWidth + fullscreenWidth;
+  }
+
+  function defaultRightGap() {
+    return Math.max(DEFAULT_RIGHT_GAP, rightAccessoryWidth() + PAGE_NAVIGATION_RIGHT_GAP);
+  }
+
   function clampPosition(left, top, toolbar) {
     const viewport = viewportBox();
     const width = Math.max(toolbar?.offsetWidth || 0, ITEM_SIZE * 2);
     const height = Math.max(toolbar?.offsetHeight || 0, ITEM_SIZE);
-    const maxLeft = Math.max(0, viewport.width - width);
+    const maxLeft = Math.max(0, viewport.width - width - rightAccessoryWidth());
     const minLeft = document.getElementById(BOUND_LINK_ID) ? Math.min(BOUND_CONTROL_SIZE, maxLeft) : 0;
     return {
       left: Math.max(minLeft, Math.min(left, maxLeft)),
@@ -81,10 +103,48 @@
     };
   }
 
+  function controlsAreAdjacent(leftControl, rightControl) {
+    if (!leftControl?.isConnected || !rightControl?.isConnected) return false;
+    const leftRect = leftControl.getBoundingClientRect();
+    const rightRect = rightControl.getBoundingClientRect();
+    return leftRect.width > 0 && leftRect.height > 0 && rightRect.width > 0 && rightRect.height > 0 &&
+      Math.abs(leftRect.right - rightRect.left) <= 1.5 && Math.abs(leftRect.top - rightRect.top) <= 1.5;
+  }
+
+  function refreshConnectedVisual(toolbar) {
+    if (!toolbar?.isConnected) return;
+    const linkToolbar = document.getElementById(BOUND_LINK_ID);
+    const bookmarkToolbar = document.getElementById(BOOKMARK_TOOLBAR_ID);
+    const connectedToLink = controlsAreAdjacent(linkToolbar, toolbar);
+    const connectedToBookmark = !connectedToLink && controlsAreAdjacent(bookmarkToolbar, toolbar);
+    const connected = connectedToLink || connectedToBookmark;
+    toolbar.dataset.connectedLeft = connected ? "true" : "false";
+    const pageNavigation = document.getElementById(PAGE_NAVIGATION_ID);
+    const fullscreen = document.getElementById(VIDEO_FULLSCREEN_ID);
+    const rightNeighbor = controlIsVisible(fullscreen) ? fullscreen : pageNavigation;
+    const connectedRight = controlsAreAdjacent(toolbar, rightNeighbor);
+    toolbar.dataset.connectedRight = connectedRight ? "true" : "false";
+    if (fullscreen) {
+      fullscreen.dataset.connectedLeft = connectedRight && rightNeighbor === fullscreen ? "true" : "false";
+      fullscreen.dataset.connectedRight = controlsAreAdjacent(fullscreen, pageNavigation) ? "true" : "false";
+    }
+    if (pageNavigation) {
+      const pageNavigationLeftNeighbor = controlIsVisible(fullscreen) ? fullscreen : toolbar;
+      pageNavigation.dataset.connectedLeft = controlsAreAdjacent(pageNavigationLeftNeighbor, pageNavigation) ? "true" : "false";
+    }
+    const linkButton = document.getElementById("__tb_btn__");
+    if (linkButton) linkButton.dataset.connectedRight = connectedToLink ? "true" : "false";
+    const bookmarkButton = document.getElementById("qiqi-tab-save-button");
+    if (bookmarkButton && !linkToolbar) bookmarkButton.dataset.connectedRight = connectedToBookmark ? "true" : "false";
+  }
+
   function positionBoundControl(toolbar) {
     if (!toolbar?.isConnected) return;
     const control = document.getElementById(BOUND_LINK_ID);
-    if (!control) return;
+    if (!control) {
+      refreshConnectedVisual(toolbar);
+      return;
+    }
     const rect = toolbar.getBoundingClientRect();
     if (!(rect.width > 0 && rect.height > 0)) return;
     control.style.left = `${Math.max(0, rect.left - BOUND_CONTROL_SIZE)}px`;
@@ -98,10 +158,11 @@
       control.style.bottom = "auto";
     }
     control.style.transform = "translate3d(0,0,0)";
+    refreshConnectedVisual(toolbar);
   }
 
   function applyDefaultPosition(toolbar) {
-    toolbar.style.right = `${DEFAULT_RIGHT_GAP}px`;
+    toolbar.style.right = `${defaultRightGap()}px`;
     toolbar.style.bottom = `${DEFAULT_BOTTOM_GAP}px`;
     toolbar.style.left = "auto";
     toolbar.style.top = "auto";
@@ -149,7 +210,9 @@
         user-select: none;
         touch-action: none;
       }
-      html:has(#__tb__) #${TOOLBAR_ID} { border-radius: 0 999px 999px 0; }
+      #${TOOLBAR_ID}[data-connected-left="true"] { border-radius: 0 999px 999px 0; }
+      #${TOOLBAR_ID}[data-connected-right="true"] { border-radius: 999px 0 0 999px; }
+      #${TOOLBAR_ID}[data-connected-left="true"][data-connected-right="true"] { border-radius: 0; }
       @media (prefers-color-scheme: dark) {
         #${TOOLBAR_ID} {
           --qft-text: rgba(255,255,255,.94);
@@ -373,9 +436,9 @@
     state.observer = new MutationObserver((mutations) => {
       const toolbarMissing = !document.getElementById(TOOLBAR_ID);
       const styleMissing = !document.getElementById(STYLE_ID);
-      const boundLinkChanged = mutations.some((mutation) => [...mutation.addedNodes, ...mutation.removedNodes].some((node) => node instanceof Element && (node.id === BOUND_LINK_ID || node.querySelector?.(`#${BOUND_LINK_ID}`))));
+      const boundControlChanged = mutations.some((mutation) => [...mutation.addedNodes, ...mutation.removedNodes].some((node) => node instanceof Element && ([BOUND_LINK_ID, BOOKMARK_TOOLBAR_ID, PAGE_NAVIGATION_ID, VIDEO_FULLSCREEN_ID].includes(node.id) || node.querySelector?.(`#${BOUND_LINK_ID}, #${BOOKMARK_TOOLBAR_ID}, #${PAGE_NAVIGATION_ID}, #${VIDEO_FULLSCREEN_ID}`))));
       if (toolbarMissing || styleMissing) ensureToolbar();
-      else if (boundLinkChanged) stabilizePosition();
+      else if (boundControlChanged) stabilizePosition();
     });
     state.observer.observe(root, { subtree: true, childList: true });
 
@@ -384,6 +447,7 @@
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(stabilizePosition, 120);
     };
+    window.addEventListener("qiqi-floating-accessories-change", stabilizePosition);
     window.addEventListener("resize", scheduleStabilize);
     window.addEventListener("scroll", scheduleStabilize, { passive: true });
     window.visualViewport?.addEventListener("resize", scheduleStabilize);

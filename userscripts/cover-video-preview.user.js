@@ -1,18 +1,9 @@
 // ==UserScript==
-// @name         封面视频预览
+// @name         视频封面预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.0
-// @description  在手机上首次点按视频封面播放静音预览，再次点按进入详情；滑动不误触，长按保留 Safari 原生行为。
-// @match        *://rule34video.com/*
-// @match        *://*.rule34video.com/*
-// @match        *://spankbang.com/*
-// @match        *://*.spankbang.com/*
-// @match        *://eporner.com/*
-// @match        *://*.eporner.com/*
-// @match        *://xvideos.com/*
-// @match        *://*.xvideos.com/*
-// @match        *://missav.ws/*
-// @match        *://*.missav.ws/*
+// @version      1.2.9
+// @description  首次点按视频封面播放静音预览，再次点按进入详情；支持通用网页检测，并保留已适配站点的专用逻辑。
+// @match        *://*/*
 // @grant        none
 // @run-at       document-start
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/cover-video-preview.user.js
@@ -26,11 +17,15 @@
     const ACTIVE_CLASS = '__qiqi_mobile_preview_active__';
     const COVER_PREVIEW_READY_ATTR = 'data-qiqi-cover-preview-ready';
     const BACKGROUND_OPEN_REQUEST_EVENT = 'qiqi:background-open-request';
-    const IS_MISSAV = /(^|\.)missav\.ws$/i.test(location.hostname);
+    const IS_MISSAV = /(^|\.)missav\.[a-z0-9-]+$/i.test(location.hostname);
+    const IS_RULE34VIDEO = /(^|\.)rule34video\.com$/i.test(location.hostname);
     const IS_SPANKBANG = /(^|\.)spankbang\.com$/i.test(location.hostname);
     const IS_EPORNER = /(^|\.)eporner\.com$/i.test(location.hostname);
     const IS_XVIDEOS = /(^|\.)xvideos\.com$/i.test(location.hostname);
-    const BLOCK_NATIVE_SITE_PREVIEW = IS_SPANKBANG || IS_EPORNER;
+    const IS_XHAMSTER = /(^|\.)xhamster\.com$/i.test(location.hostname);
+    const IS_PORNHUB = /(^|\.)pornhub\.com$/i.test(location.hostname);
+    const IS_SPECIAL_SITE = IS_MISSAV || IS_RULE34VIDEO || IS_SPANKBANG || IS_EPORNER || IS_XVIDEOS || IS_XHAMSTER || IS_PORNHUB;
+    const BLOCK_NATIVE_SITE_PREVIEW = IS_SPANKBANG || IS_EPORNER || IS_XHAMSTER || IS_PORNHUB;
     const TAP_MAX_MS = 500;
     const SWIPE_CANCEL_DISTANCE = 10;
     // 页面最后一次滚动后的安定期：期内的点按视为“停住惯性滚动”，不触发预览。
@@ -42,7 +37,6 @@
     }
 
     let active = null;
-    let nativeProbeToken = 0;
     let enforcingSinglePreview = false;
     let previewStartedAt = 0;
     let previewScrollY = null;
@@ -365,22 +359,51 @@
         return target instanceof Element ? target.closest(selector) : null;
     }
 
+    function isPreviewCapableCard(card) {
+        if (!(card instanceof Element)) return false;
+        // 全局总规则：详情链接、封面和可立即解析的预览视频源缺一不可。
+        // 没有预览源就不接管点击，Logo、导航和普通图片链接维持网站原行为。
+        return Boolean(cardUrl(card) && card.querySelector('img, picture') && resolvePreviewUrl(card));
+    }
+
     function findCard(target) {
         let card = null;
 
+        card = safeClosest(target, 'li[data-video-vkey], li[data-video-id]');
+        if (IS_PORNHUB && card?.querySelector('a.imageLink[data-webm][href*="view_video.php?viewkey="] img') && isPreviewCapableCard(card)) return card;
+
+        if (IS_XHAMSTER) {
+            card = safeClosest(target, 'a[data-previewvideo][href]');
+            if (!isPreviewCapableCard(card)) return null;
+            try {
+                const url = new URL(cardUrl(card));
+                return url.origin === location.origin && /^\/videos\/[^/]+(?:\/|$)/i.test(url.pathname) ? card : null;
+            } catch (_) {
+                return null;
+            }
+        }
+
         card = safeClosest(target, 'a[href]');
-        if (card?.querySelector('video.preview[data-src], video.preview[src]') && card.querySelector('img')) return card;
-        if (IS_SPANKBANG && card?.matches('[data-testid="recommended-video"]') &&
-            card.querySelector('img') && card.querySelector('video source[data-src], video source[src]')) return card;
+        if (IS_MISSAV && card?.querySelector('video.preview[data-src], video.preview[src]') && isPreviewCapableCard(card)) return card;
+        if (IS_SPANKBANG && card?.matches('[data-testid="recommended-video"]') && isPreviewCapableCard(card)) return card;
+
+        card = safeClosest(target, '.mb[data-id], .mb[data-vp]');
+        if (IS_EPORNER && card?.querySelector('.mbimg img, .mbcontent img') && cardUrl(card) && resolveEpornerPreviewUrl(card)) return card;
 
         card = safeClosest(target, '.mb');
-        if (card?.dataset.id && card.querySelector('.mbimg img, img[data-st]')) return card;
+        if (IS_RULE34VIDEO && card?.dataset.id && isPreviewCapableCard(card)) return card;
 
         card = safeClosest(target, '.item.thumb, a.th');
-        if (card?.querySelector('[data-preview]')) return card;
+        if (IS_EPORNER && isPreviewCapableCard(card)) return card;
 
         card = safeClosest(target, '.video-item, .js-video-item, [id^="recommended_video"]');
-        if (card?.querySelector('a[href], video, source')) return card;
+        if (IS_SPECIAL_SITE && isPreviewCapableCard(card)) return card;
+
+        card = safeClosest(target, 'a[href]');
+        if (isPreviewCapableCard(card)) return card;
+
+        card = safeClosest(target, 'article, li, [class*="video" i], [class*="thumb" i], [class*="card" i]');
+        if (isPreviewCapableCard(card)) return card;
 
         return null;
     }
@@ -402,7 +425,9 @@
             media.getAttribute?.('data-preview'),
             media.getAttribute?.('data-preview-url'),
             media.getAttribute?.('data-video-preview'),
+            media.getAttribute?.('data-previewvideo'),
             media.getAttribute?.('data-trailer'),
+            media.getAttribute?.('data-webm'),
             media.getAttribute?.('data-src'),
             media.currentSrc,
             media.getAttribute?.('src'),
@@ -414,11 +439,38 @@
         return null;
     }
 
+    function resolveEpornerPreviewUrl(card) {
+        if (!IS_EPORNER || !card?.matches?.('.mb')) return null;
+        const img = card.querySelector('.mbimg img, .mbcontent img, img[data-st]');
+        const imageUrl = normalizeMediaUrl(img?.currentSrc || img?.getAttribute('src'));
+        const id = String(card.dataset.id || card.dataset.vp?.split('|')[0] || '').replace(/\D/g, '');
+        if (!id || !imageUrl) return null;
+        try {
+            const url = new URL(imageUrl);
+            if (!/(^|\.)eporner\.com$/i.test(url.hostname) || !url.pathname.includes(`/${id}/`)) return null;
+            url.pathname = url.pathname.replace(/\/[^/]*$/, `/${id}-preview.mp4`);
+            url.hostname = url.hostname.replace(/^static-key-cdn\./i, 'static-ca-cdn.');
+            return url.href;
+        } catch (_) {
+            return null;
+        }
+    }
+
     function resolvePreviewUrl(card) {
+        const epornerUrl = resolveEpornerPreviewUrl(card);
+        if (epornerUrl) return epornerUrl;
+
+        // 部分站点（如 xHamster）把预览地址直接放在卡片链接自身，
+        // querySelector 只搜索后代，必须先检查 card 本身。
+        const ownUrl = sourceFromMedia(card);
+        if (ownUrl) return ownUrl;
+
         const directCandidates = card.querySelectorAll([
             '[data-preview-url]',
             '[data-video-preview]',
+            '[data-previewvideo]',
             '[data-trailer]',
+            '[data-webm]',
             '[data-preview]',
             'video[src]',
             'video[data-src]',
@@ -430,7 +482,7 @@
             if (directUrl) return directUrl;
         }
 
-        if (card.matches('.mb')) {
+        if (card.matches('.mb') && !IS_EPORNER) {
             const id = String(card.dataset.id || '').replace(/\D/g, '');
             const img = card.querySelector('.mbimg img, img[data-st]');
             const thumbUrl = normalizeMediaUrl(img?.currentSrc || img?.getAttribute('src'));
@@ -449,13 +501,17 @@
     function findPreviewHost(card) {
         const imageLink = card.querySelector('img')?.closest('a');
         const candidates = [
-            card.querySelector('[data-preview]'),
+            card.querySelector('.mbcontent'),
             card.querySelector('.mbimg'),
+            card.querySelector('.wrap_image[data-preview]'),
+            card.querySelector('a.imageLink[data-webm]'),
             card.querySelector('a.thumb'),
             card.querySelector('.thumb'),
             card.querySelector('.video-thumb'),
             card.querySelector('.cover'),
             imageLink,
+            card.querySelector('[data-preview-url], [data-video-preview], [data-previewvideo], [data-trailer], [data-webm], [data-preview]'),
+            card.querySelector('video[src], video[data-src], video source[src], video source[data-src]'),
             card,
         ];
         return candidates.find(function (node) {
@@ -467,7 +523,11 @@
 
     function cardUrl(card) {
         if (!(card instanceof Element)) return null;
-        const link = card.matches('a[href]') ? card : card.querySelector('a[href]');
+        const link = IS_EPORNER && card.matches('.mb')
+            ? card.querySelector('.mbimg a[href^="/video-"], .mbcontent a[href^="/video-"]')
+            : IS_PORNHUB && card.matches('li[data-video-vkey], li[data-video-id]')
+                ? card.querySelector('a.imageLink[href*="view_video.php?viewkey="]')
+                : card.matches('a[href]') ? card : card.querySelector('img')?.closest('a[href]') || card.querySelector('a[href]');
         return normalizeMediaUrl(link?.getAttribute('href'));
     }
 
@@ -518,7 +578,6 @@
     }
 
     function stopActive() {
-        nativeProbeToken += 1;
         stopNativePreviews();
         if (!active) {
             return;
@@ -607,28 +666,6 @@
         return true;
     }
 
-    function dispatchHover(card) {
-        const targets = [card, card.querySelector('a.thumb, .thumb, .cover, img')].filter(Boolean);
-        targets.forEach(function (target) {
-            try { target.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' })); } catch (_) {}
-            try { target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window })); } catch (_) {}
-            try { target.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false, cancelable: true, view: window })); } catch (_) {}
-        });
-    }
-
-    function probeNativePreview(card) {
-        const token = ++nativeProbeToken;
-        dispatchHover(card);
-
-        [40, 120, 260, 520, 900].forEach(function (delay) {
-            setTimeout(function () {
-                if (token !== nativeProbeToken || active?.card === card) return;
-                const url = resolvePreviewUrl(card);
-                if (url) mountPreview(card, url);
-            }, delay);
-        });
-    }
-
     function mountNativePreview(card, video) {
         stopActive();
         const src = sourceFromMedia(video);
@@ -659,11 +696,9 @@
 
     function startPreview(card) {
         const nativeVideo = card.querySelector('video.preview[data-src], video.preview[src]');
-        if (nativeVideo) return mountNativePreview(card, nativeVideo);
+        if (nativeVideo && sourceFromMedia(nativeVideo)) return mountNativePreview(card, nativeVideo);
         const url = resolvePreviewUrl(card);
-        if (url) return mountPreview(card, url);
-        probeNativePreview(card);
-        return true;
+        return url ? mountPreview(card, url) : false;
     }
 
     function requestBackgroundOpen(href) {
@@ -710,12 +745,13 @@
         const nativePreviewIsOpen = Boolean(nativeVideo && (
             !nativeVideo.classList.contains('hidden') || !nativeVideo.paused
         ));
-        event.preventDefault();
-        event.stopImmediatePropagation();
         if (nativePreviewIsOpen || active?.card === card) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
             openCardLink(card);
-        } else {
-            startPreview(card);
+        } else if (startPreview(card)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
         }
     }, true);
 

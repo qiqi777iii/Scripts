@@ -15,118 +15,90 @@ const api_1 = require("../class/api");
 function View() {
     const dismiss = scripting_1.Navigation.useDismiss();
     const reloadKey = (0, scripting_1.useObservable)(0);
-    return (createElement(scripting_1.NavigationStack, null,
+    return createElement(scripting_1.NavigationStack, null,
         createElement(StackView, { reloadKey: reloadKey.value, navigationTitle: scripting_1.Script.name, toolbar: {
                 topBarLeading: [createElement(scripting_1.Button, { title: "关闭", systemImage: "xmark", action: dismiss })],
-                topBarTrailing: [
-                    createElement(scripting_1.Button, { title: "账号", systemImage: "person.crop.circle", action: () => scripting_1.Navigation.present(createElement(AccountView, { onChanged: () => reloadKey.setValue(reloadKey.value + 1) })) }),
-                ],
-            } })));
+                topBarTrailing: [createElement(scripting_1.Button, { title: "账号", systemImage: "person.2", action: () => scripting_1.Navigation.present(createElement(AccountView, { onChanged: () => reloadKey.setValue(reloadKey.value + 1) })) })],
+            } }));
 }
 exports.View = View;
 function AccountView({ onChanged }) {
     const dismiss = scripting_1.Navigation.useDismiss();
-    function done(message) {
+    const reloadKey = (0, scripting_1.useObservable)(0);
+    function refresh(message) {
         return __awaiter(this, void 0, void 0, function* () {
             scripting_1.Widget.reloadUserWidgets();
             onChanged();
-            yield Dialog.alert({ message });
-            dismiss();
+            reloadKey.setValue(reloadKey.value + 1);
+            if (message)
+                yield Dialog.alert({ message });
         });
     }
-    return (createElement(scripting_1.NavigationStack, null,
+    const states = api_1.api.getAccountStates();
+    return createElement(scripting_1.NavigationStack, null,
         createElement(scripting_1.List, { navigationTitle: "账号管理", toolbar: { topBarLeading: [createElement(scripting_1.Button, { title: "关闭", systemImage: "xmark", action: dismiss })] } },
-            createElement(scripting_1.Section, { footer: createElement(scripting_1.Text, null, "平时刷新只使用已保存的 accessToken，不会反复打开 ChatGPT 官网。凭证失效后请重新授权；如果只想退出网页登录态，请使用“退出网页登录”。") },
-                createElement(scripting_1.Button, { title: "登录 / 重新授权", systemImage: "person.crop.circle.badge.checkmark", action: () => __awaiter(this, void 0, void 0, function* () {
-                        const ok = yield api_1.api.presentLogin();
-                        yield done(ok ? "凭证保存成功" : "未保存，新凭证获取失败，旧凭证已保留");
+            states.map((state) => createElement(scripting_1.Section, { header: createElement(scripting_1.Text, null, `账号 ${state.slot}`), footer: createElement(scripting_1.Text, null, state.configured ? (state.usage?.email || "凭证已保存") : "未添加") },
+                createElement(scripting_1.Button, { title: state.configured ? "重新授权 / 替换" : "添加账号", systemImage: "person.crop.circle.badge.plus", action: () => __awaiter(this, void 0, void 0, function* () {
+                        const ok = yield api_1.api.presentLogin(state.slot);
+                        yield refresh(ok ? `账号 ${state.slot} 已保存` : "未保存新凭证，原账号仍保留");
                     }) }),
-                createElement(scripting_1.Button, { title: "切换账号", systemImage: "arrow.triangle.2.circlepath", action: () => __awaiter(this, void 0, void 0, function* () {
-                        const ok = yield api_1.api.switchAccount();
-                        yield done(ok ? "已切换账号" : "切换失败，旧账号仍保留");
-                    }) }),
-                createElement(scripting_1.Button, { title: "退出网页登录（保留本地凭证）", systemImage: "rectangle.portrait.and.arrow.right", action: () => __awaiter(this, void 0, void 0, function* () {
+                state.configured ? createElement(scripting_1.Button, { title: "删除此账号", systemImage: "trash", role: "destructive", action: () => __awaiter(this, void 0, void 0, function* () {
+                        yield api_1.api.clearSavedAccount(state.slot);
+                        yield refresh(`账号 ${state.slot} 已删除`);
+                    }) }) : null)),
+            createElement(scripting_1.Section, { footer: createElement(scripting_1.Text, null, "两个账号的 accessToken、额度缓存分别保存在本机。添加第二个账号不会覆盖第一个；网页登录 Cookie 仅用于授权，额度刷新直接使用各自凭证。") },
+                createElement(scripting_1.Button, { title: "退出 ChatGPT 网页登录", systemImage: "rectangle.portrait.and.arrow.right", action: () => __awaiter(this, void 0, void 0, function* () {
                         yield api_1.api.clearWebLoginState();
-                        yield done("已退出网页登录，本地凭证仍保留，可继续刷新额度");
-                    }) }),
-                createElement(scripting_1.Button, { title: "彻底退出并清除本地凭证", systemImage: "trash", role: "destructive", action: () => __awaiter(this, void 0, void 0, function* () {
-                        yield api_1.api.clearSavedAccount();
-                        yield done("已彻底退出，并清除本地凭证");
-                    }) })))));
+                        yield Dialog.alert({ message: "已退出网页登录，两个本地账号凭证仍保留" });
+                    }) }))));
 }
 function StackView({ reloadKey }) {
-    var _a, _b, _c, _d, _e;
-    const data = (0, scripting_1.useObservable)();
-    const needLogin = (0, scripting_1.useObservable)(false);
+    const rows = (0, scripting_1.useObservable)();
     function init() {
         return __awaiter(this, void 0, void 0, function* () {
-            const cached = api_1.api.getCached();
-            const hasCached = !!cached;
-            if (cached) {
-                // 先秒开显示缓存，后台再刷新。
-                data.setValue(cached.usage);
-            }
-            else {
-                data.setValue(undefined);
-            }
-            needLogin.setValue(false);
-            try {
-                const r = yield api_1.api.getUsage();
-                data.setValue(r);
-                scripting_1.Widget.reloadUserWidgets();
-            }
-            catch (e) {
-                if (hasCached) {
-                    // 已有缓存时，不因为后台刷新失败打断页面显示。
-                    return;
-                }
-                if (e && e.needLogin) {
-                    needLogin.setValue(true);
-                    data.setValue(null);
-                }
-                else {
-                    data.setValue(null);
-                    yield Dialog.alert({ message: String(e) });
-                }
-            }
+            const cached = api_1.api.getAccountStates();
+            rows.setValue(cached);
+            const refreshed = yield api_1.api.getAllUsage();
+            rows.setValue(refreshed.map((item) => ({
+                slot: item.slot,
+                configured: item.configured,
+                usage: item.usage,
+                error: item.error,
+            })));
+            scripting_1.Widget.reloadUserWidgets();
         });
     }
-    (0, scripting_1.useEffect)(() => {
-        init();
-    }, [reloadKey]);
-    if (data.value === undefined) {
+    (0, scripting_1.useEffect)(() => { init(); }, [reloadKey]);
+    if (rows.value === undefined)
         return createElement(scripting_1.ProgressView, null);
-    }
-    if (data.value === null) {
-        return (createElement(scripting_1.ContentUnavailableView, { label: createElement(scripting_1.Label, { title: needLogin.value ? "请先登录 ChatGPT" : "暂无数据", systemImage: "person.crop.circle.badge.exclamationmark" }), actions: [
-                createElement(scripting_1.Button, { title: "登录", systemImage: "person.crop.circle", action: () => __awaiter(this, void 0, void 0, function* () {
-                        const ok = yield api_1.api.presentLogin();
-                        if (!ok)
-                            yield Dialog.alert({ message: "未保存，新凭证获取失败，旧凭证已保留" });
-                        init();
-                    }) }),
-            ] }));
-    }
-    const usage = data.value;
-    const primary = (_b = (_a = usage.rate_limit) === null || _a === void 0 ? void 0 : _a.primary_window) !== null && _b !== void 0 ? _b : null;
-    const secondary = (_d = (_c = usage.rate_limit) === null || _c === void 0 ? void 0 : _c.secondary_window) !== null && _d !== void 0 ? _d : null;
-    const primaryPercent = Math.round((_e = primary === null || primary === void 0 ? void 0 : primary.used_percent) !== null && _e !== void 0 ? _e : 0);
-    return (createElement(scripting_1.List, { refreshable: () => __awaiter(this, void 0, void 0, function* () {
-            yield Promise.all([init(), new Promise((r) => setTimeout(r, 500))]);
-        }) },
+    return createElement(scripting_1.List, { refreshable: () => __awaiter(this, void 0, void 0, function* () { yield Promise.all([init(), new Promise((r) => setTimeout(r, 500))]); }) },
+        rows.value.map((item) => item.usage
+            ? createElement(UsageSection, { slot: item.slot, usage: item.usage, stale: !!item.error })
+            : createElement(scripting_1.Section, { header: createElement(scripting_1.Text, null, `账号 ${item.slot}`) },
+                createElement(scripting_1.ContentUnavailableView, { label: createElement(scripting_1.Label, { title: item.configured ? "凭证已失效" : "尚未添加", systemImage: "person.crop.circle.badge.plus" }), actions: [createElement(scripting_1.Button, { title: item.configured ? "重新授权" : "添加账号", action: () => __awaiter(this, void 0, void 0, function* () {
+                                const ok = yield api_1.api.presentLogin(item.slot);
+                                if (!ok)
+                                    yield Dialog.alert({ message: "凭证获取失败，原账号未受影响" });
+                                yield init();
+                            }) })] }))));
+}
+function UsageSection({ slot, usage, stale }) {
+    const primary = usage.rate_limit?.primary_window || null;
+    const secondary = usage.rate_limit?.secondary_window || null;
+    const primaryPercent = Math.round(primary?.used_percent || 0);
+    return createElement(Fragment, null,
         createElement(scripting_1.Section, { header: createElement(scripting_1.HStack, null,
-                createElement(scripting_1.Text, null, usage.email || "ChatGPT"),
+                createElement(scripting_1.Text, null, `账号 ${slot} · ${usage.email || "ChatGPT"}`),
                 createElement(scripting_1.Spacer, null),
-                createElement(scripting_1.Text, null, usage.plan)), footer: createElement(scripting_1.Text, null, primary
-                ? "重置: " + new Date(primary.reset_at * 1000).toLocaleString("zh-CN")
-                : "无主窗口数据") },
+                stale ? createElement(scripting_1.Text, { foregroundStyle: "orange" }, "缓存") : null,
+                createElement(scripting_1.Text, null, usage.plan)), footer: createElement(scripting_1.Text, null, primary ? "重置: " + new Date(primary.reset_at * 1000).toLocaleString("zh-CN") : "无主窗口数据") },
             createElement(Bar, { label: "主窗口", percent: primaryPercent })),
-        secondary ? (createElement(scripting_1.Section, { footer: createElement(scripting_1.Text, null, "重置: " + new Date(secondary.reset_at * 1000).toLocaleString("zh-CN")) },
-            createElement(Bar, { label: "周限制", percent: Math.round(secondary.used_percent) }))) : null));
+        secondary ? createElement(scripting_1.Section, { footer: createElement(scripting_1.Text, null, "重置: " + new Date(secondary.reset_at * 1000).toLocaleString("zh-CN")) },
+            createElement(Bar, { label: `账号 ${slot} 周限制`, percent: Math.round(secondary.used_percent) })) : null);
 }
 function Bar({ label, percent }) {
-    return (createElement(scripting_1.HStack, { spacing: 10 },
-        createElement(scripting_1.Text, { font: "footnote", foregroundStyle: "secondaryLabel", frame: { width: 78, alignment: "leading" } }, label),
+    return createElement(scripting_1.HStack, { spacing: 10 },
+        createElement(scripting_1.Text, { font: "footnote", foregroundStyle: "secondaryLabel", frame: { width: 90, alignment: "leading" } }, label),
         createElement(scripting_1.Rectangle, { frame: { height: 22 }, fill: "tertiarySystemFill", clipShape: { type: "capsule", style: "continuous" }, overlay: createElement(scripting_1.Rectangle, { fill: { gradient: true, color: "tintColor" }, scaleEffect: { x: percent / 100, y: 1, anchor: "leading" }, clipShape: { type: "capsule", style: "continuous" } }) }),
-        createElement(scripting_1.Text, { font: "footnote", monospacedDigit: true, frame: { width: 42, alignment: "trailing" } }, `${percent}%`)));
+        createElement(scripting_1.Text, { font: "footnote", monospacedDigit: true, frame: { width: 42, alignment: "trailing" } }, `${percent}%`));
 }

@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace qiqi.tabs-saver
-// @version 2.0.7
+// @version 2.2.1
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
-// @run-at document-end
+// @run-at document-start
 // @grant Scripting.FileManager
 // @grant Scripting.tabs
 // @grant GM.closeTab
@@ -24,7 +24,7 @@
   // 收藏按钮默认放在“新标签页打开”按钮左侧；其未加载时再放到悬浮工具栏左侧。
   const NEW_TAB_TOOLBAR_ID = "__tb__"
   const FLOATING_TOOLBAR_ID = "universal-pagination-floating-menu"
-  const INITIAL_GAP = 8
+  const INITIAL_GAP = 0
   const FALLBACK_RIGHT = 234
   const BOTTOM_GAP = 40
 
@@ -36,6 +36,7 @@
   let startX = 0, startY = 0, startLeft = 0, startTop = 0
   let positionSyncScheduled = false
   let rootObserver = null
+  let observedRoot = null
   let headObserver = null
   let observedHead = null
   let healthCheckQueued = false
@@ -43,6 +44,8 @@
   let neighborResizeObserver = null
   let neighborMutationObserver = null
   let observedNeighbor = null
+  let healthWatchdogTimer = null
+  const HEALTH_WATCHDOG_INTERVAL = 60000
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
@@ -452,7 +455,8 @@
     style.id = "qiqi-tab-save-style"
     style.textContent = `
 #${WRAP_ID}{position:fixed;left:0;top:0;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top;}
-#${BUTTON_ID}{width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,background .2s,color .2s,box-shadow .2s;}
+#${BUTTON_ID}{width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,background .2s,color .2s,box-shadow .2s,border-radius .12s ease;}
+#${BUTTON_ID}[data-connected-right="true"]{border-radius:999px 0 0 999px;}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
 #${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:rgba(229,229,234,.96);}
 #${PICKER_ID}{position:fixed;right:8px;bottom:43px;z-index:2147483647;min-width:210px;max-width:min(300px,calc(100vw - 32px));max-height:min(420px,calc(100vh - 120px));overflow:auto;padding:10px;border-radius:18px;background:rgba(255,255,255,.84);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);border:1px solid rgba(60,60,67,.16);box-shadow:0 10px 30px rgba(0,0,0,.18);font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#111;}
@@ -530,6 +534,26 @@
     return true
   }
 
+  function controlsAreAdjacent(leftControl, rightControl) {
+    if (!leftControl?.isConnected || !rightControl?.isConnected) return false
+    const leftRect = leftControl.getBoundingClientRect()
+    const rightRect = rightControl.getBoundingClientRect()
+    return leftRect.width > 0 && leftRect.height > 0 && rightRect.width > 0 && rightRect.height > 0 &&
+      Math.abs(leftRect.right - rightRect.left) <= 1.5 && Math.abs(leftRect.top - rightRect.top) <= 1.5
+  }
+
+  function refreshConnectedVisual() {
+    if (!button?.isConnected || !wrap?.isConnected) return
+    const newTabToolbar = document.getElementById(NEW_TAB_TOOLBAR_ID)
+    const floatingToolbar = document.getElementById(FLOATING_TOOLBAR_ID)
+    const connectedToNewTab = controlsAreAdjacent(wrap, newTabToolbar)
+    const connectedToFloating = !connectedToNewTab && controlsAreAdjacent(wrap, floatingToolbar)
+    button.dataset.connectedRight = (connectedToNewTab || connectedToFloating) ? "true" : "false"
+    const newTabButton = document.getElementById("__tb_btn__")
+    if (newTabButton) newTabButton.dataset.connectedLeft = connectedToNewTab ? "true" : "false"
+    if (floatingToolbar && !newTabToolbar) floatingToolbar.dataset.connectedLeft = connectedToFloating ? "true" : "false"
+  }
+
   function observeNeighbor(neighbor) {
     if (observedNeighbor === neighbor) return
     neighborResizeObserver?.disconnect()
@@ -586,6 +610,7 @@
       if (!wrap || dragging) return
       if (savedPosition) applySavedPosition()
       else applyDefaultPosition()
+      refreshConnectedVisual()
       wrap.style.transform = "translate3d(0,0,0)"
     })
   }
@@ -694,10 +719,19 @@
     window.addEventListener("scroll", schedulePositionStabilize, { passive: true })
     window.visualViewport?.addEventListener("resize", schedulePositionStabilize)
     window.visualViewport?.addEventListener("scroll", schedulePositionStabilize)
-    window.addEventListener("pageshow", () => { refreshSavedVisual(); scheduleHealthCheck() })
+    window.addEventListener("pageshow", () => { refreshSavedVisual(); scheduleHealthCheck(); startHealthWatchdog() })
+    window.addEventListener("pagehide", stopHealthWatchdog)
     window.addEventListener("focus", refreshSavedVisual)
     window.addEventListener("load", scheduleHealthCheck, { once: true })
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshSavedVisual(); scheduleHealthCheck() } })
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopHealthWatchdog()
+        return
+      }
+      refreshSavedVisual()
+      scheduleHealthCheck()
+      startHealthWatchdog()
+    })
   }
 
   function ensureButtonHealthy() {
@@ -714,7 +748,11 @@
     }
     wrap = currentWrap
     button = currentButton
-    schedulePositionStabilize()
+    const parent = document.body || document.documentElement
+    if (parent && currentWrap.parentNode !== parent) {
+      parent.appendChild(currentWrap)
+      schedulePositionStabilize()
+    }
   }
 
   function scheduleHealthCheck() {
@@ -757,13 +795,32 @@
     const root = document.documentElement
     if (!root) return
     watchHead(document.head)
-    if (rootObserver) return
+    if (rootObserver && observedRoot === root && root.isConnected) return
+    rootObserver?.disconnect()
+    observedRoot = root
     rootObserver = new MutationObserver(mutations => {
       if (!mutations.some(mutationTouchesFloatingUi)) return
       watchHead(document.head)
       scheduleHealthCheck()
     })
     rootObserver.observe(root, { childList: true, subtree: true })
+  }
+
+  function stopHealthWatchdog() {
+    if (!healthWatchdogTimer) return
+    clearTimeout(healthWatchdogTimer)
+    healthWatchdogTimer = null
+  }
+
+  function startHealthWatchdog() {
+    if (healthWatchdogTimer || document.hidden) return
+    const tick = () => {
+      healthWatchdogTimer = null
+      if (document.hidden) return
+      scheduleHealthCheck()
+      healthWatchdogTimer = setTimeout(tick, HEALTH_WATCHDOG_INTERVAL)
+    }
+    healthWatchdogTimer = setTimeout(tick, HEALTH_WATCHDOG_INTERVAL)
   }
 
   function createButton() {
@@ -774,6 +831,7 @@
     button = document.createElement("button")
     button.id = BUTTON_ID
     button.type = "button"
+    button.dataset.connectedRight = "false"
     button.setAttribute("aria-label", "收藏并关闭标签页")
     button.innerHTML = bookmarkSVG(false)
     button.addEventListener("pointerdown", onPointerDown)
@@ -786,13 +844,15 @@
     refreshSavedVisual()
     installPositionListeners()
     startDomGuard()
+    startHealthWatchdog()
     schedulePositionStabilize()
   }
 
   function boot() {
     createButton()
+    startHealthWatchdog()
     scheduleHealthCheck()
-    ;[120, 500, 1500].forEach(delay => setTimeout(schedulePositionStabilize, delay))
+    ;[120, 500, 1500, 3000, 6000].forEach(delay => setTimeout(scheduleHealthCheck, delay))
   }
 
   boot()
