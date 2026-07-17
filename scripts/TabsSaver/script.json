@@ -1,5 +1,5 @@
 {
-  "version" : "2.2.1",
+  "version" : "2.2.2",
   "localizedDescriptions" : {
     "zh" : "从分享表把网页收藏到分组，稍后在脚本里查看和打开。",
     "en" : "Save web pages from the share sheet into groups and browse them later."

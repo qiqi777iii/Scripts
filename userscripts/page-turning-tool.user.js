@@ -1,30 +1,30 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.5
+// @version      1.0.9
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并在悬浮工具栏右侧显示独立翻页按钮。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
-// @run-at       document-end
+// @run-at       document-start
 // @grant        GM.log
 // ==/UserScript==
 
 (() => {
   "use strict";
 
-  const SCRIPT_ID = "qiqi-floating-page-navigation";
+  const SCRIPT_ID = "floating-page-navigation";
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BASE_TOOLBAR_ID = "universal-pagination-floating-menu";
-  const VIDEO_FULLSCREEN_ID = "qiqi-video-fullscreen";
+  const VIDEO_FULLSCREEN_ID = "video-fullscreen";
   const ITEM_SIZE = 35;
   const WIDTH = ITEM_SIZE * 2;
   const DEFAULT_RIGHT_GAP = 16;
   const DEFAULT_BOTTOM_GAP = 28;
-  const SHARED_URL_CHANGE_EVENT = "qiqi:urlchange";
-  const SHARED_HISTORY_HOOK_KEY = "__qiqiSharedHistoryHookV1__";
+  const SHARED_URL_CHANGE_EVENT = "scripts:urlchange";
+  const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__";
   const STATE = {
     prev: null,
     next: null,
@@ -1514,7 +1514,15 @@
     if (!Number.isFinite(target) || target < 1) return null;
 
     const link = findNodeSeekPageLink(target);
-    if (link) return link;
+    if (link?.href) {
+      // NodeSeek 会拦截分页链接并进行站内局部换页。在 userscript 的 content world 中，
+      // 这类 SPA 路由可能不会触发上面的 history hook，旧状态会停在 navigating，
+      // 页面内容虽已翻页，但翻页工具不会重新完成识别。改为使用真实链接做完整导航，
+      // 让 Safari 在新文档中重新注入全部浏览器脚本。
+      try {
+        return { __paginationUrl: new URL(link.href, location.href).href };
+      } catch (_) {}
+    }
 
     const url = makeNodeSeekPageUrl(target);
     return url ? { __paginationUrl: url } : null;
@@ -1598,9 +1606,7 @@
 
   function refreshConnectedVisual(box) {
     const base = document.getElementById(BASE_TOOLBAR_ID);
-    const fullscreen = document.getElementById(VIDEO_FULLSCREEN_ID);
-    const leftControl = visible(fullscreen) ? fullscreen : base;
-    setConnectedVisual(box, controlsAreAdjacent(leftControl, box) ? leftControl : null);
+    setConnectedVisual(box, controlsAreAdjacent(base, box) ? base : null);
   }
 
   function observeBaseToolbar(base) {
@@ -1620,8 +1626,7 @@
   function applyPosition(box) {
     if (!box?.isConnected) return;
     const base = document.getElementById(BASE_TOOLBAR_ID);
-    const fullscreen = document.getElementById(VIDEO_FULLSCREEN_ID);
-    const anchor = visible(fullscreen) ? fullscreen : base;
+    const anchor = base;
     observeBaseToolbar(anchor);
     if (anchor) {
       const rect = anchor.getBoundingClientRect();
@@ -1641,9 +1646,7 @@
         setConnectedVisual(box, anchor);
         requestAnimationFrame(() => {
           if (!box.isConnected) return;
-          const currentBase = document.getElementById(BASE_TOOLBAR_ID);
-          const currentFullscreen = document.getElementById(VIDEO_FULLSCREEN_ID);
-          const currentAnchor = visible(currentFullscreen) ? currentFullscreen : currentBase;
+          const currentAnchor = document.getElementById(BASE_TOOLBAR_ID);
           refreshConnectedVisual(box);
           if (currentAnchor && !controlsAreAdjacent(currentAnchor, box)) schedulePosition();
         });
@@ -1699,6 +1702,8 @@
         transform: translate3d(0,0,0);
       }
       #${SCRIPT_ID}[data-connected-left="true"] { border-radius: 0 999px 999px 0; }
+      #${SCRIPT_ID}[data-connected-right="true"] { border-radius: 999px 0 0 999px; }
+      #${SCRIPT_ID}[data-connected-left="true"][data-connected-right="true"] { border-radius: 0; }
       #${SCRIPT_ID} button {
         box-sizing: border-box;
         position: relative;
@@ -1775,6 +1780,7 @@
     box = document.createElement("div");
     box.id = SCRIPT_ID;
     box.dataset.connectedLeft = "false";
+    box.dataset.connectedRight = "false";
     box.setAttribute("role", "toolbar");
     box.setAttribute("aria-label", "上一页下一页");
     box.innerHTML = `
@@ -1887,17 +1893,33 @@
     try { window[SHARED_HISTORY_HOOK_KEY] = { version: 1, eventName: SHARED_URL_CHANGE_EVENT }; } catch (_) {}
     ["pushState", "replaceState"].forEach((name) => {
       const original = history[name];
-      if (typeof original !== "function" || original.__qiqiUrlChangeEvent === SHARED_URL_CHANGE_EVENT) return;
+      if (typeof original !== "function" || original.__urlChangeEvent === SHARED_URL_CHANGE_EVENT) return;
       const wrapped = function () {
         const result = original.apply(this, arguments);
         window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind: name, href: location.href } }));
         return result;
       };
-      try { Object.defineProperty(wrapped, "__qiqiUrlChangeEvent", { value: SHARED_URL_CHANGE_EVENT }); } catch (_) {}
+      try { Object.defineProperty(wrapped, "__urlChangeEvent", { value: SHARED_URL_CHANGE_EVENT }); } catch (_) {}
       try { history[name] = wrapped; } catch (_) {}
     });
     window.addEventListener("popstate", () => window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind: "popstate", href: location.href } })));
     window.addEventListener("hashchange", () => window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind: "hashchange", href: location.href } })));
+  }
+
+  function installNodeSeekNavigationGuard() {
+    if (!isNodeSeek()) return;
+    document.addEventListener("click", (event) => {
+      const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
+      if (!link || event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      let url;
+      try { url = new URL(link.href, location.href); } catch (_) { return; }
+      if (url.origin !== location.origin) return;
+      if (!/^\/page-\d+\/?$/i.test(url.pathname) && !/^\/categories\/[^/]+\/page-\d+\/?$/i.test(url.pathname)) return;
+      // 在站点的 SPA 点击处理器之前接管分页，确保新文档重新注入所有 userscript。
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      hardNavigate(url.href);
+    }, true);
   }
 
   function init() {
@@ -1910,6 +1932,7 @@
     STATE.initialized = true;
     ensureToolbar();
     installSharedHistoryHook();
+    installNodeSeekNavigationGuard();
     normalizeXVideosHashLater();
     scheduleEventUpdate();
 
@@ -1921,7 +1944,7 @@
     });
     STATE.observer.observe(root, { subtree: true, childList: true });
 
-    window.addEventListener("qiqi-floating-accessories-change", () => {
+    window.addEventListener("floating-accessories-change", () => {
       ensureToolbar();
       schedulePosition();
     });
@@ -1931,6 +1954,17 @@
     window.visualViewport?.addEventListener("scroll", schedulePosition);
     window.addEventListener("pageshow", () => {
       STATE.navigating = false;
+      ensureToolbar();
+      scheduleEventUpdate();
+    });
+    // Safari 从页面缓存恢复、切回标签页或站点完成异步挂载时，再做事件驱动自检；
+    // 不使用持续轮询，避免长期资源消耗。
+    window.addEventListener("focus", () => {
+      STATE.navigating = false;
+      ensureToolbar();
+      scheduleEventUpdate();
+    });
+    document.addEventListener("readystatechange", () => {
       ensureToolbar();
       scheduleEventUpdate();
     });

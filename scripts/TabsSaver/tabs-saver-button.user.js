@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
-// @namespace qiqi.tabs-saver
-// @version 2.2.1
+// @namespace tabs-saver
+// @version 2.2.2
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -12,11 +12,11 @@
 // ==/UserScript==
 
 (() => {
-  const WRAP_ID = "qiqi-tab-save-toolbar"
-  const BUTTON_ID = "qiqi-tab-save-button"
-  const PICKER_ID = "qiqi-tab-save-picker"
-  const TOAST_ID = "qiqi-tab-save-toast"
-  const DIALOG_ID = "qiqi-tab-save-dialog"
+  const WRAP_ID = "tab-save-toolbar"
+  const BUTTON_ID = "tab-save-button"
+  const PICKER_ID = "tab-save-picker"
+  const TOAST_ID = "tab-save-toast"
+  const DIALOG_ID = "tab-save-dialog"
   const STORE_FILE_NAME = "tabs-saver-store.json"
   const DEFAULT_GROUP_NAME = "默认"
   const BTN_SIZE = 35
@@ -450,9 +450,9 @@
   }
 
   function injectCSS() {
-    if (document.getElementById("qiqi-tab-save-style")) return
+    if (document.getElementById("tab-save-style")) return
     const style = document.createElement("style")
-    style.id = "qiqi-tab-save-style"
+    style.id = "tab-save-style"
     style.textContent = `
 #${WRAP_ID}{position:fixed;left:0;top:0;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top;}
 #${BUTTON_ID}{width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,background .2s,color .2s,box-shadow .2s,border-radius .12s ease;}
@@ -771,7 +771,7 @@
     headObserver = new MutationObserver(mutations => {
       for (const mutation of mutations) {
         for (const node of mutation.removedNodes) {
-          if (node?.id === "qiqi-tab-save-style") {
+          if (node?.id === "tab-save-style") {
             scheduleHealthCheck()
             return
           }

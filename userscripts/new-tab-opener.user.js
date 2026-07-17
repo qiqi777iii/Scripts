@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.9
+// @version      1.2.10
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -26,11 +26,11 @@
     const DEFAULT_BOTTOM = BOTTOM_GAP + (NEIGHBOR_TOOLBAR_HEIGHT - BTN_SIZE) / 2;
     const FALLBACK_TOOLBAR_WIDTH = 70;
     const DEFAULT_RIGHT = TOOLBAR_RIGHT_GAP + FALLBACK_TOOLBAR_WIDTH + LINK_TOOLBAR_GAP;
-    const GROUP_DRAG_EVENT = 'qiqi-floating-toolbar-group-drag';
-    const SHARED_URL_CHANGE_EVENT = 'qiqi:urlchange';
-    const SHARED_HISTORY_HOOK_KEY = '__qiqiSharedHistoryHookV1__';
-    const COVER_PREVIEW_READY_ATTR = 'data-qiqi-cover-preview-ready';
-    const BACKGROUND_OPEN_REQUEST_EVENT = 'qiqi:background-open-request';
+    const GROUP_DRAG_EVENT = 'floating-toolbar-group-drag';
+    const SHARED_URL_CHANGE_EVENT = 'scripts:urlchange';
+    const SHARED_HISTORY_HOOK_KEY = '__sharedHistoryHookV1__';
+    const COVER_PREVIEW_READY_ATTR = 'data-cover-preview-ready';
+    const BACKGROUND_OPEN_REQUEST_EVENT = 'scripts:background-open-request';
     const GROUP_LEFT_WIDTH = 35;
     const SENSITIVE_ACTION_NAMES = new Set([
         'login', 'signin', 'signout', 'logout', 'auth', 'authorize', 'oauth', 'sso', 'saml',
@@ -443,7 +443,7 @@
 
     function isCoverPreviewTarget(target, site) {
         if (!(target instanceof Element) || document.documentElement?.getAttribute(COVER_PREVIEW_READY_ATTR) !== '1') return false;
-        if (target.closest('.__qiqi_mobile_preview_active__')) return true;
+        if (target.closest('.__mobile_preview_active__')) return true;
         if (site === 'rule34video.com') return Boolean(target.closest('[data-preview]'));
         if (site === 'eporner.com') return Boolean(target.closest('.mbimg'));
         if (site === 'xhamster.com') return Boolean(target.closest('a[data-previewvideo][href*="/videos/"]'));
@@ -585,7 +585,7 @@
 
     // 悬浮工具栏保留兼容 DOM id：链接按钮直接贴在它左侧，形成一条视觉组合栏。
     const FLOATING_TOOLBAR_ID = 'universal-pagination-floating-menu';
-    const BOOKMARK_TOOLBAR_ID = 'qiqi-tab-save-toolbar';
+    const BOOKMARK_TOOLBAR_ID = 'tab-save-toolbar';
 
     function controlsAreAdjacent(leftControl, rightControl) {
         if (!leftControl?.isConnected || !rightControl?.isConnected) return false;
@@ -603,7 +603,7 @@
         const connectedRight = controlsAreAdjacent(toolbar, floatingToolbar);
         linkBtn.dataset.connectedLeft = connectedLeft ? 'true' : 'false';
         linkBtn.dataset.connectedRight = connectedRight ? 'true' : 'false';
-        const bookmarkButton = document.getElementById('qiqi-tab-save-button');
+        const bookmarkButton = document.getElementById('tab-save-button');
         if (bookmarkButton) bookmarkButton.dataset.connectedRight = connectedLeft ? 'true' : 'false';
         if (floatingToolbar) floatingToolbar.dataset.connectedLeft = connectedRight ? 'true' : 'false';
     }
@@ -868,13 +868,13 @@
         try { window[SHARED_HISTORY_HOOK_KEY] = { version: 1, eventName: SHARED_URL_CHANGE_EVENT }; } catch (_) {}
         ['pushState', 'replaceState'].forEach(function (name) {
             const original = history[name];
-            if (typeof original !== 'function' || original.__qiqiUrlChangeEvent === SHARED_URL_CHANGE_EVENT) return;
+            if (typeof original !== 'function' || original.__urlChangeEvent === SHARED_URL_CHANGE_EVENT) return;
             const wrapped = function () {
                 const result = original.apply(this, arguments);
                 dispatchSharedUrlChange(name);
                 return result;
             };
-            try { Object.defineProperty(wrapped, '__qiqiUrlChangeEvent', { value: SHARED_URL_CHANGE_EVENT }); } catch (_) {}
+            try { Object.defineProperty(wrapped, '__urlChangeEvent', { value: SHARED_URL_CHANGE_EVENT }); } catch (_) {}
             try { history[name] = wrapped; } catch (_) {}
         });
         window.addEventListener('popstate', function () { dispatchSharedUrlChange('popstate'); });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.4.5
+// @version      1.4.8
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
@@ -21,11 +21,10 @@
   // 保留旧 DOM ID，确保“新标签页打开”和 TabsSaver 的组合定位继续兼容。
   const TOOLBAR_ID = "universal-pagination-floating-menu";
   const STYLE_ID = `${TOOLBAR_ID}-style`;
-  const GROUP_DRAG_EVENT = "qiqi-floating-toolbar-group-drag";
+  const GROUP_DRAG_EVENT = "floating-toolbar-group-drag";
   const BOUND_LINK_ID = "__tb__";
-  const BOOKMARK_TOOLBAR_ID = "qiqi-tab-save-toolbar";
-  const PAGE_NAVIGATION_ID = "qiqi-floating-page-navigation";
-  const VIDEO_FULLSCREEN_ID = "qiqi-video-fullscreen";
+  const BOOKMARK_TOOLBAR_ID = "tab-save-toolbar";
+  const PAGE_NAVIGATION_ID = "floating-page-navigation";
   const ITEM_SIZE = 35;
   const BOUND_CONTROL_SIZE = 35;
   const PAGE_NAVIGATION_WIDTH = 70;
@@ -82,9 +81,7 @@
   }
 
   function rightAccessoryWidth() {
-    const pageNavigationWidth = document.getElementById(PAGE_NAVIGATION_ID) ? PAGE_NAVIGATION_WIDTH : 0;
-    const fullscreenWidth = controlIsVisible(document.getElementById(VIDEO_FULLSCREEN_ID)) ? ITEM_SIZE : 0;
-    return pageNavigationWidth + fullscreenWidth;
+    return document.getElementById(PAGE_NAVIGATION_ID) ? PAGE_NAVIGATION_WIDTH : 0;
   }
 
   function defaultRightGap() {
@@ -120,21 +117,14 @@
     const connected = connectedToLink || connectedToBookmark;
     toolbar.dataset.connectedLeft = connected ? "true" : "false";
     const pageNavigation = document.getElementById(PAGE_NAVIGATION_ID);
-    const fullscreen = document.getElementById(VIDEO_FULLSCREEN_ID);
-    const rightNeighbor = controlIsVisible(fullscreen) ? fullscreen : pageNavigation;
-    const connectedRight = controlsAreAdjacent(toolbar, rightNeighbor);
+    const connectedRight = controlsAreAdjacent(toolbar, pageNavigation);
     toolbar.dataset.connectedRight = connectedRight ? "true" : "false";
-    if (fullscreen) {
-      fullscreen.dataset.connectedLeft = connectedRight && rightNeighbor === fullscreen ? "true" : "false";
-      fullscreen.dataset.connectedRight = controlsAreAdjacent(fullscreen, pageNavigation) ? "true" : "false";
-    }
     if (pageNavigation) {
-      const pageNavigationLeftNeighbor = controlIsVisible(fullscreen) ? fullscreen : toolbar;
-      pageNavigation.dataset.connectedLeft = controlsAreAdjacent(pageNavigationLeftNeighbor, pageNavigation) ? "true" : "false";
+      pageNavigation.dataset.connectedLeft = connectedRight ? "true" : "false";
     }
     const linkButton = document.getElementById("__tb_btn__");
     if (linkButton) linkButton.dataset.connectedRight = connectedToLink ? "true" : "false";
-    const bookmarkButton = document.getElementById("qiqi-tab-save-button");
+    const bookmarkButton = document.getElementById("tab-save-button");
     if (bookmarkButton && !linkToolbar) bookmarkButton.dataset.connectedRight = connectedToBookmark ? "true" : "false";
   }
 
@@ -436,7 +426,7 @@
     state.observer = new MutationObserver((mutations) => {
       const toolbarMissing = !document.getElementById(TOOLBAR_ID);
       const styleMissing = !document.getElementById(STYLE_ID);
-      const boundControlChanged = mutations.some((mutation) => [...mutation.addedNodes, ...mutation.removedNodes].some((node) => node instanceof Element && ([BOUND_LINK_ID, BOOKMARK_TOOLBAR_ID, PAGE_NAVIGATION_ID, VIDEO_FULLSCREEN_ID].includes(node.id) || node.querySelector?.(`#${BOUND_LINK_ID}, #${BOOKMARK_TOOLBAR_ID}, #${PAGE_NAVIGATION_ID}, #${VIDEO_FULLSCREEN_ID}`))));
+      const boundControlChanged = mutations.some((mutation) => [...mutation.addedNodes, ...mutation.removedNodes].some((node) => node instanceof Element && ([BOUND_LINK_ID, BOOKMARK_TOOLBAR_ID, PAGE_NAVIGATION_ID].includes(node.id) || node.querySelector?.(`#${BOUND_LINK_ID}, #${BOOKMARK_TOOLBAR_ID}, #${PAGE_NAVIGATION_ID}`))));
       if (toolbarMissing || styleMissing) ensureToolbar();
       else if (boundControlChanged) stabilizePosition();
     });
@@ -447,7 +437,7 @@
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(stabilizePosition, 120);
     };
-    window.addEventListener("qiqi-floating-accessories-change", stabilizePosition);
+    window.addEventListener("floating-accessories-change", stabilizePosition);
     window.addEventListener("resize", scheduleStabilize);
     window.addEventListener("scroll", scheduleStabilize, { passive: true });
     window.visualViewport?.addEventListener("resize", scheduleStabilize);

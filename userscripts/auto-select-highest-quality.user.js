@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         自动选择最高画质
 // @namespace    local.scripting.eporner
-// @version      1.0.4
+// @version      1.0.5
 // @description  自动选择播放视频的最高可用画质
 // @match        https://www.eporner.com/video-*/
 // @match        https://www.eporner.com/video-*/*
@@ -16,7 +16,7 @@
   "use strict"
 
   const QUALITY_PATTERN = /(?:^|\s)(\d{3,4})\s*p\b/i
-  const USER_PLAYBACK_ATTRIBUTE = "data-qiqi-user-playback-until"
+  const USER_PLAYBACK_ATTRIBUTE = "data-user-playback-until"
   const RETRY_INTERVAL = 500
   const MAX_RETRIES = 40
 

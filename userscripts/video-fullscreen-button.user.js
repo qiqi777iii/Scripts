@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频全屏按钮
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.5
+// @version      1.0.7
 // @description  检测网页视频，点击按钮后自动播放并切换为全屏。
 // @author       Scripting Agent
 // @match        http://*/*
@@ -13,12 +13,12 @@
 (() => {
   "use strict";
 
-  const SCRIPT_ID = "qiqi-video-fullscreen";
+  const SCRIPT_ID = "video-fullscreen";
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BASE_TOOLBAR_ID = "universal-pagination-floating-menu";
-  const PAGE_NAVIGATION_ID = "qiqi-floating-page-navigation";
-  const ACCESSORIES_CHANGE_EVENT = "qiqi-floating-accessories-change";
-  const USER_PLAYBACK_ATTRIBUTE = "data-qiqi-user-playback-until";
+  const PAGE_NAVIGATION_ID = "floating-page-navigation";
+  const ACCESSORIES_CHANGE_EVENT = "floating-accessories-change";
+  const USER_PLAYBACK_ATTRIBUTE = "data-user-playback-until";
   const ITEM_SIZE = 35;
   const DEFAULT_RIGHT_GAP = 86;
   const DEFAULT_BOTTOM_GAP = 28;
@@ -102,12 +102,12 @@
   function refreshConnectedVisual(button) {
     const base = document.getElementById(BASE_TOOLBAR_ID);
     const navigation = document.getElementById(PAGE_NAVIGATION_ID);
-    const connectedLeft = controlsAreAdjacent(base, button);
-    const connectedRight = controlsAreAdjacent(button, navigation);
+    const leftControl = elementVisible(navigation) ? navigation : base;
+    const connectedLeft = controlsAreAdjacent(leftControl, button);
     button.dataset.connectedLeft = connectedLeft ? "true" : "false";
-    button.dataset.connectedRight = connectedRight ? "true" : "false";
-    if (base) base.dataset.connectedRight = connectedLeft ? "true" : "false";
-    if (navigation) navigation.dataset.connectedLeft = connectedRight ? "true" : "false";
+    button.dataset.connectedRight = "false";
+    if (base && !elementVisible(navigation)) base.dataset.connectedRight = connectedLeft ? "true" : "false";
+    if (navigation) navigation.dataset.connectedRight = connectedLeft && leftControl === navigation ? "true" : "false";
   }
 
   function observeAnchor(anchor, key) {
@@ -129,7 +129,19 @@
     observeAnchor(base, "base");
     observeAnchor(navigation, "nav");
 
-    if (elementVisible(base)) {
+    if (elementVisible(navigation)) {
+      const rect = navigation.getBoundingClientRect();
+      button.style.left = `${rect.right}px`;
+      button.style.right = "auto";
+      const usesBottom = navigation.style.bottom && navigation.style.bottom !== "auto" && (!navigation.style.top || navigation.style.top === "auto");
+      if (usesBottom) {
+        button.style.bottom = navigation.style.bottom;
+        button.style.top = "auto";
+      } else {
+        button.style.top = `${rect.top}px`;
+        button.style.bottom = "auto";
+      }
+    } else if (elementVisible(base)) {
       const rect = base.getBoundingClientRect();
       button.style.left = `${rect.right}px`;
       button.style.right = "auto";
@@ -141,12 +153,6 @@
         button.style.top = `${rect.top}px`;
         button.style.bottom = "auto";
       }
-    } else if (elementVisible(navigation)) {
-      const rect = navigation.getBoundingClientRect();
-      button.style.left = `${Math.max(0, rect.left - ITEM_SIZE)}px`;
-      button.style.right = "auto";
-      button.style.top = `${rect.top}px`;
-      button.style.bottom = "auto";
     } else {
       button.style.right = `${DEFAULT_RIGHT_GAP}px`;
       button.style.bottom = `${DEFAULT_BOTTOM_GAP}px`;
@@ -385,6 +391,7 @@
     const button = createButton();
     button.style.display = visible ? "flex" : "none";
     button.setAttribute("aria-hidden", visible ? "false" : "true");
+    refreshConnectedVisual(button);
     if (visible !== state.visible) {
       state.visible = visible;
       notifyAccessoriesChanged();
@@ -440,7 +447,7 @@
     window.visualViewport?.addEventListener("resize", schedulePosition);
     window.visualViewport?.addEventListener("scroll", schedulePosition);
     window.addEventListener("pageshow", () => scheduleUpdate(0));
-    window.addEventListener("qiqi:urlchange", () => scheduleUpdate(80));
+    window.addEventListener("scripts:urlchange", () => scheduleUpdate(80));
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) scheduleUpdate(0);
     });

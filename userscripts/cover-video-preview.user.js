@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频封面预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.9
+// @version      1.2.10
 // @description  首次点按视频封面播放静音预览，再次点按进入详情；支持通用网页检测，并保留已适配站点的专用逻辑。
 // @match        *://*/*
 // @grant        none
@@ -13,10 +13,10 @@
 (function () {
     'use strict';
 
-    const PREVIEW_CLASS = '__qiqi_mobile_preview__';
-    const ACTIVE_CLASS = '__qiqi_mobile_preview_active__';
-    const COVER_PREVIEW_READY_ATTR = 'data-qiqi-cover-preview-ready';
-    const BACKGROUND_OPEN_REQUEST_EVENT = 'qiqi:background-open-request';
+    const PREVIEW_CLASS = '__mobile_preview__';
+    const ACTIVE_CLASS = '__mobile_preview_active__';
+    const COVER_PREVIEW_READY_ATTR = 'data-cover-preview-ready';
+    const BACKGROUND_OPEN_REQUEST_EVENT = 'scripts:background-open-request';
     const IS_MISSAV = /(^|\.)missav\.[a-z0-9-]+$/i.test(location.hostname);
     const IS_RULE34VIDEO = /(^|\.)rule34video\.com$/i.test(location.hostname);
     const IS_SPANKBANG = /(^|\.)spankbang\.com$/i.test(location.hostname);
@@ -53,9 +53,9 @@
         const COVER_SELECTOR = '.thumb-inside .thumb';
         const PREVIEW_IMAGE_SELECTOR = 'img[data-pvv]';
         const VIDEO_PATH_RE = /^\/video(?:\.[^/]+|\d+)(?:\/|$)/i;
-        const PREVIEW_CLASS = '__qiqi_xvideos_preview__';
-        const ACTIVE_CLASS = '__qiqi_xvideos_preview_active__';
-        const LINK_INTERACTION_OWNER_ATTR = 'data-qiqi-link-interaction-owner';
+        const PREVIEW_CLASS = '__xvideos_preview__';
+        const ACTIVE_CLASS = '__xvideos_preview_active__';
+        const LINK_INTERACTION_OWNER_ATTR = 'data-link-interaction-owner';
         const TAP_MAX_MS = 500;
         const MOVE_CANCEL_DISTANCE = 10;
         const PREVIEW_SCROLL_CANCEL_DISTANCE = 48;
@@ -122,9 +122,9 @@
         }
 
         function addStyle() {
-            if (document.getElementById('__qiqi_xvideos_adapter_style__')) return;
+            if (document.getElementById('__xvideos_adapter_style__')) return;
             const style = document.createElement('style');
-            style.id = '__qiqi_xvideos_adapter_style__';
+            style.id = '__xvideos_adapter_style__';
             style.textContent = `
     .${PREVIEW_CLASS}{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;display:block!important;object-fit:cover!important;z-index:2147483000!important;margin:0!important;padding:0!important;border:0!important;outline:0!important;background:#000!important;pointer-events:none!important;opacity:1!important;visibility:visible!important;}
     `;
@@ -139,9 +139,9 @@
             try { current.video.pause(); } catch (_) {}
             current.video.remove();
             current.context.card.classList.remove(ACTIVE_CLASS);
-            if (current.context.cover.dataset.qiqiXvideosPosition === '1') {
+            if (current.context.cover.dataset.previewXvideosPosition === '1') {
                 current.context.cover.style.position = current.oldPosition;
-                delete current.context.cover.dataset.qiqiXvideosPosition;
+                delete current.context.cover.dataset.previewXvideosPosition;
             }
         }
 
@@ -162,7 +162,7 @@
 
             const oldPosition = context.cover.style.position;
             if (getComputedStyle(context.cover).position === 'static') {
-                context.cover.dataset.qiqiXvideosPosition = '1';
+                context.cover.dataset.previewXvideosPosition = '1';
                 context.cover.style.position = 'relative';
             }
 
@@ -346,9 +346,9 @@
     }
 
     function addStyle() {
-        if (document.getElementById('__qiqi_mobile_preview_style__')) return;
+        if (document.getElementById('__mobile_preview_style__')) return;
         const style = document.createElement('style');
-        style.id = '__qiqi_mobile_preview_style__';
+        style.id = '__mobile_preview_style__';
         style.textContent = `
 .${PREVIEW_CLASS}{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:cover!important;display:block!important;z-index:2147483000!important;margin:0!important;padding:0!important;border:0!important;outline:0!important;background:#000!important;pointer-events:none!important;opacity:1!important;visibility:visible!important;}
 `;
@@ -592,9 +592,9 @@
             active.video?.remove();
         }
         active.card?.classList.remove(ACTIVE_CLASS);
-        if (active.host?.dataset.qiqiPreviewPosition === '1') {
+        if (active.host?.dataset.previewPosition === '1') {
             active.host.style.position = active.oldPosition;
-            delete active.host.dataset.qiqiPreviewPosition;
+            delete active.host.dataset.previewPosition;
         }
         active = null;
         previewScrollY = null;
@@ -624,7 +624,7 @@
         const computed = getComputedStyle(host).position;
         const oldPosition = host.style.position;
         if (computed === 'static') {
-            host.dataset.qiqiPreviewPosition = '1';
+            host.dataset.previewPosition = '1';
             host.style.position = 'relative';
         }
 
