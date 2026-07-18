@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.2
+// @version      1.2.3
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并在悬浮工具栏右侧显示独立翻页按钮。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
+// @noframes
 // @run-at       document-start
 // @grant        GM.log
 // ==/UserScript==
@@ -121,8 +122,14 @@
     return Boolean(el.hasAttribute?.('download') || /pay(?:ment|wall)?|log[\s_-]?in|sign[\s_-]?in|download|preview|subscri(?:be|ption)|支付|付费|购买|登录|登陆|下载|预览|订阅/i.test(all));
   }
 
+  function isOwnUiElement(el) {
+    return Boolean(
+      el?.closest?.(`#${SCRIPT_ID}, #${BASE_TOOLBAR_ID}, #${VIDEO_FULLSCREEN_ID}`)
+    );
+  }
+
   function scoreCandidate(el, direction) {
-    if (!visible(el) || disabled(el) || deniedPaginationCandidate(el)) return -999;
+    if (isOwnUiElement(el) || !visible(el) || disabled(el) || deniedPaginationCandidate(el)) return -999;
     const text = normalizeText(el).toLowerCase();
     const href = (el.getAttribute("href") || "").toLowerCase();
     const all = `${text} ${href}`;
@@ -267,7 +274,7 @@
 
   function findByRel(direction) {
     const rel = direction === "next" ? "next" : "prev";
-    return $(`a[rel~="${rel}"], link[rel~="${rel}"]`);
+    return $(`a[rel~="${rel}"]`);
   }
 
   function safeCall(label, fn, fallback = null) {
@@ -354,7 +361,8 @@
       "[title]",
     ];
 
-    const candidates = uniqueElements($$(selectors.join(",")));
+    const candidates = uniqueElements($$(selectors.join(",")))
+      .filter((el) => !isOwnUiElement(el));
     let best = null;
     let bestScore = 30; // 低于该分数认为误判风险较高
     for (const el of candidates) {
@@ -1407,7 +1415,7 @@
     if (!el || STATE.navigating) return;
     if (el.__paginationElement) return clickOrNavigate(el.__paginationElement);
     if (el.__paginationUrl) return hardNavigate(el.__paginationUrl);
-    if (!(el instanceof Element) || deniedPaginationCandidate(el)) return;
+    if (!(el instanceof Element) || isOwnUiElement(el) || deniedPaginationCandidate(el)) return;
     const link = el.tagName === "A" || el.tagName === "LINK" ? el : el.closest("a[href]");
     const clickTarget = link || el;
     if (!(clickTarget instanceof HTMLElement) || (link && deniedPaginationCandidate(link))) return;
@@ -1853,7 +1861,10 @@
     if (document.hidden || !withFallback) return;
     const retry = () => {
       STATE.fallbackTimer = null;
-      if (document.hidden || candidateUsable(STATE.prev) || candidateUsable(STATE.next)) return;
+      if (
+        document.hidden ||
+        (candidateUsable(STATE.prev) && candidateUsable(STATE.next))
+      ) return;
       scheduleUpdate(0);
       STATE.fallbackAttempt += 1;
       const delays = [1000, 2000, 4000];
