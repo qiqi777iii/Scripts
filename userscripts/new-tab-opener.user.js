@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.4.8
+// @version      1.4.10
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -40,7 +40,7 @@
         'action', 'delete', 'remove', 'follow', 'like', 'vote', 'favorite', 'bookmark', 'cart'
     ]);
 
-    let enabled = getVal('newTabEnabled', true);
+    let enabled = getVal('newTabEnabled', false);
     const sharedSiteKey = getSharedSiteKey(location.hostname);
     const sharedEnabledKey = SHARED_ENABLED_KEY_PREFIX + sharedSiteKey;
     let toolbar, linkBtn, bodyObserver, toolbarEnsureTimer, neighborResizeObserver, neighborMutationObserver, observedNeighbor;
@@ -73,10 +73,6 @@
         try { localStorage.setItem(KEY + key, String(val)); } catch (_) {}
     }
 
-    function removeVal(key) {
-        try { localStorage.removeItem(KEY + key); } catch (_) {}
-    }
-
     function getSharedSiteKey(hostname) {
         const host = String(hostname || '').toLowerCase().replace(/^\.+|\.+$/g, '');
         if (!host || host === 'localhost' || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':')) return host;
@@ -98,7 +94,7 @@
     }
 
     async function loadEnabledState() {
-        const localValue = getVal('newTabEnabled', true);
+        const localValue = getVal('newTabEnabled', false);
         if (typeof GM === 'undefined' || !GM.getValue) {
             enabled = localValue;
             return;
@@ -250,12 +246,6 @@
         return /^\/video-[^/]+(?:\/|$)/i.test(url.pathname) || /^\/hd-porn\/[a-z0-9]+(?:\/|$)/i.test(url.pathname);
     }
 
-    function shouldBackgroundOpenForSite(a, url) {
-        const curatedVideoResult = shouldBackgroundOpenOnCuratedVideoSite(url);
-        if (curatedVideoResult !== null) return curatedVideoResult;
-        return shouldBackgroundOpenOnMissAv(a, url);
-    }
-
     function installEnabledStateListener() {
         if (valueChangeListenerInstalled || typeof GM === 'undefined' || !GM.addValueChangeListener) return;
         valueChangeListenerInstalled = true;
@@ -265,11 +255,6 @@
             setVal('newTabEnabled', enabled);
             updateBtn();
         });
-    }
-
-    function refresh() {
-        saveEnabledState();
-        updateBtn();
     }
 
     function nextFrame(fn) {
@@ -542,7 +527,6 @@
 
     function updateBtn() {
         if (!linkBtn) return;
-        linkBtn.innerHTML = linkSVG();
         linkBtn.dataset.enabled = enabled ? 'true' : 'false';
         linkBtn.style.opacity = '1';
         linkBtn.title = enabled ? '后台新标签页打开：开' : '后台新标签页打开：关';
@@ -679,12 +663,6 @@
 
     // 纯 fixed 定位：允许页面内临时拖动；刷新页面后恢复默认位置。
 
-    function migrateBackgroundOpenDefault() {
-        if (getVal('backgroundOpenDefaultVersion', '') === '1.1.0') return;
-        // 默认值已由共享状态初始化；迁移标记不能覆盖同一主域名其他子域保存的关闭状态。
-        setVal('backgroundOpenDefaultVersion', '1.1.0');
-    }
-
     function buildToolbar() {
         injectCSS();
 
@@ -733,11 +711,7 @@
             startNeighborLeft = neighborRect.left;
             startNeighborTop = neighborRect.top;
         }
-        // 纯 fixed：直接用 rect，不加 offset。
-        toolbar.style.left = rect.left + 'px';
-        toolbar.style.top = rect.top + 'px';
-        toolbar.style.right = 'auto';
-        toolbar.style.bottom = 'auto';
+        // 普通点击保持原有 bottom/top 锚定不变；只有移动超过阈值后才进入拖动定位。
         linkBtn.setPointerCapture?.(e.pointerId);
     }
 
@@ -759,6 +733,8 @@
             const pos = clampPos(startLeft + dx, startTop + dy);
             toolbar.style.left = pos.left + 'px';
             toolbar.style.top = pos.top + 'px';
+            toolbar.style.right = 'auto';
+            toolbar.style.bottom = 'auto';
         }
     }
 
@@ -778,7 +754,8 @@
             savedPosition = clampPos(parseInt(toolbar.style.left, 10) || 0, parseInt(toolbar.style.top, 10) || 0);
         } else if (e.type !== 'pointercancel') {
             enabled = !enabled;
-            refresh();
+            saveEnabledState();
+            updateBtn();
         }
         dragNeighborToolbar = null;
     }
@@ -895,7 +872,6 @@
     }
 
     function init() {
-        migrateBackgroundOpenDefault();
         if (!ensureToolbar()) return;
         startBodyGuard();
         installPositionListenersOnce();

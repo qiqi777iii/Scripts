@@ -23,28 +23,13 @@ import {
   type VideoHistoryStore,
 } from "./store"
 
-const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-})
-
-function formatDate(timestamp: number): string {
-  return Number.isFinite(timestamp) && timestamp > 0
-    ? dateFormatter.format(new Date(timestamp))
-    : "未知时间"
-}
-
 function displayCode(code: string): string {
   return code.toUpperCase()
 }
 
 export default function HistoryView() {
   const dismiss = Navigation.useDismiss()
-  const [store, setStore] = useState<VideoHistoryStore>({ version: 1, updatedAt: 0, records: {} })
+  const [store, setStore] = useState<VideoHistoryStore>({ version: 1, records: {} })
   const [loading, setLoading] = useState(true)
   const [showClearConfirmation, setShowClearConfirmation] = useState(false)
 
@@ -59,7 +44,6 @@ export default function HistoryView() {
   }, [])
 
   const records = Object.values(store.records)
-    .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
 
   const removeRecord = async (record: VideoHistoryRecord) => {
     setStore(await deleteVideoHistory(record.code))
@@ -113,7 +97,7 @@ export default function HistoryView() {
             </HStack>
           </Section>
         ) : records.length ? (
-          <Section title="最近打开">
+          <Section title="打开记录">
             {records.map(record => (
               <Link
                 key={record.code}
@@ -137,15 +121,12 @@ export default function HistoryView() {
                     font="title3"
                   />
                   <VStack alignment="leading" spacing={4}>
-                    <Text font="headline">{displayCode(record.code)}</Text>
-                    <Text font="caption" foregroundStyle="secondaryLabel">
-                      {`最近打开：${formatDate(record.lastOpenedAt)}`}
-                    </Text>
-                    <Text font="caption2" foregroundStyle="tertiaryLabel">
-                      {record.openCount > 1
-                        ? `首次：${formatDate(record.firstOpenedAt)} · ${record.openCount} 次`
-                        : `首次：${formatDate(record.firstOpenedAt)}`}
-                    </Text>
+                    <Text font="headline">{record.title || displayCode(record.code)}</Text>
+                    {record.title ? (
+                      <Text font="caption" foregroundStyle="secondaryLabel">
+                        {displayCode(record.code)}
+                      </Text>
+                    ) : null}
                   </VStack>
                   <Spacer />
                   <Image systemName="arrow.up.right" foregroundStyle="tertiaryLabel" />

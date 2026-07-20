@@ -7,7 +7,6 @@ import type {
   TranslatorSettings,
 } from "../types"
 import { isAssistantTranslationAvailable } from "./assistant_translation_engine"
-import { isLocalTranslationAvailable } from "./translation_engine"
 
 const STORAGE_KEY = "translator_settings_v2"
 const DEFAULT_TARGET_LANGUAGE_CODE = "zh-Hans"
@@ -21,9 +20,7 @@ function builtInEntry(kind: KnownTranslationEngineKind): TranslatorEngineEntry {
     kind,
     label: option.label,
     systemImage: option.systemImage,
-    enabled: kind === "apple_intelligence"
-      ? defaultEnabled && isLocalTranslationAvailable()
-      : defaultEnabled,
+    enabled: defaultEnabled,
     isBuiltIn: true,
     config: kind === "assistant"
       ? {
@@ -40,18 +37,14 @@ function createDefaultSettings(): TranslatorSettings {
     defaultTargetLanguageCode: DEFAULT_TARGET_LANGUAGE_CODE,
     defaultSourceLanguageCode: DEFAULT_SOURCE_LANGUAGE_CODE,
     engines: [
-      builtInEntry("apple_intelligence"),
       builtInEntry("assistant"),
-      builtInEntry("system_translation"),
       builtInEntry("google_translate"),
     ],
   }
 }
 
 const REQUIRED_BUILT_INS: BuiltInTranslationEngineKind[] = [
-  "apple_intelligence",
   "assistant",
-  "system_translation",
   "google_translate",
 ]
 
@@ -154,13 +147,6 @@ function normalizeEngineEntry(raw: Partial<TranslatorEngineEntry> | null | undef
 }
 
 function applyAvailabilityRules(entry: TranslatorEngineEntry): TranslatorEngineEntry {
-  if (entry.kind === "apple_intelligence" && !isLocalTranslationAvailable()) {
-    return {
-      ...entry,
-      enabled: false,
-    }
-  }
-
   if (entry.kind === "assistant") {
     if (!isAssistantTranslationAvailable()) {
       return {
@@ -190,7 +176,7 @@ function migrateLegacySettings(raw: any): TranslatorSettings | null {
   const enabled = raw.engineEnabled as Record<string, boolean>
 
   for (const kind of order) {
-    if (kind !== "apple_intelligence" && kind !== "system_translation") continue
+    if (kind !== "assistant" && kind !== "google_translate") continue
     const entry = builtInEntry(kind)
     entry.enabled = enabled[kind] ?? entry.enabled
     engines.push(entry)

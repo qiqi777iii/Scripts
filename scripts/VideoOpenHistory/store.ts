@@ -1,14 +1,11 @@
 export type VideoHistoryRecord = {
   code: string
-  firstOpenedAt: number
-  lastOpenedAt: number
-  openCount: number
   url: string
+  title?: string
 }
 
 export type VideoHistoryStore = {
   version: 1
-  updatedAt: number
   records: Record<string, VideoHistoryRecord>
 }
 
@@ -17,7 +14,7 @@ const VIDEO_CODE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*-\d+$/i
 const HISTORY_LIMIT = 5000
 
 function emptyStore(): VideoHistoryStore {
-  return { version: 1, updatedAt: 0, records: {} }
+  return { version: 1, records: {} }
 }
 
 function normalizeRecord(codeKey: string, value: unknown): VideoHistoryRecord | null {
@@ -27,31 +24,21 @@ function normalizeRecord(codeKey: string, value: unknown): VideoHistoryRecord | 
   if (typeof value === "number" && Number.isFinite(value)) {
     return {
       code,
-      firstOpenedAt: value,
-      lastOpenedAt: value,
-      openCount: 1,
       url: `https://missav.ai/${code}`,
     }
   }
 
   if (!value || typeof value !== "object") return null
   const item = value as Partial<VideoHistoryRecord>
-  const firstOpenedAt = Number(item.firstOpenedAt)
-  const lastOpenedAt = Number(item.lastOpenedAt)
-  const openedAt = Number.isFinite(firstOpenedAt)
-    ? firstOpenedAt
-    : Number.isFinite(lastOpenedAt)
-      ? lastOpenedAt
-      : Date.now()
 
   return {
     code,
-    firstOpenedAt: openedAt,
-    lastOpenedAt: Number.isFinite(lastOpenedAt) ? lastOpenedAt : openedAt,
-    openCount: Math.max(1, Math.floor(Number(item.openCount) || 1)),
     url: typeof item.url === "string" && /^https?:\/\//i.test(item.url)
       ? item.url
       : `https://missav.ai/${code}`,
+    title: typeof item.title === "string" && item.title.trim()
+      ? item.title.trim().slice(0, 300)
+      : undefined,
   }
 }
 
@@ -59,7 +46,7 @@ function parseStore(raw: string): VideoHistoryStore {
   const parsed = JSON.parse(raw) as unknown
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return emptyStore()
 
-  const candidate = parsed as { records?: unknown; updatedAt?: unknown }
+  const candidate = parsed as { records?: unknown }
   const source = candidate.records && typeof candidate.records === "object" && !Array.isArray(candidate.records)
     ? candidate.records as Record<string, unknown>
     : parsed as Record<string, unknown>
@@ -68,13 +55,11 @@ function parseStore(raw: string): VideoHistoryStore {
   Object.entries(source)
     .map(([code, value]) => normalizeRecord(code, value))
     .filter((item): item is VideoHistoryRecord => item !== null)
-    .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)
-    .slice(0, HISTORY_LIMIT)
+    .slice(-HISTORY_LIMIT)
     .forEach(item => { records[item.code] = item })
 
   return {
     version: 1,
-    updatedAt: Number(candidate.updatedAt) || 0,
     records,
   }
 }
@@ -94,7 +79,6 @@ export async function loadVideoHistory(): Promise<VideoHistoryStore> {
 }
 
 async function saveVideoHistory(store: VideoHistoryStore): Promise<void> {
-  store.updatedAt = Date.now()
   await FileManager.writeAsString(FILE, JSON.stringify(store), "utf8")
 }
 

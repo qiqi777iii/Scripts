@@ -13,7 +13,6 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @connect      *
-// @connect      whatslink.info
 // @homepageURL  https://github.com/qiqi777iii/Scripts
 // @supportURL   https://github.com/qiqi777iii/Scripts/issues
 // @run-at       document-start
@@ -208,14 +207,6 @@
             color: #e0a800;
             text-decoration: underline;
         }
-        .http-link {
-            color: #28a745;
-            word-break: break-all;
-        }
-        .http-link:hover {
-            color: #218838;
-            text-decoration: underline;
-        }
         .whatslink-overlay { position: fixed; inset: 0; z-index: 10000040; display: flex; align-items: center; justify-content: center; padding: 22px; background: rgba(15,23,42,.66); backdrop-filter: blur(8px); }
         .whatslink-modal { width: min(1100px,96vw); max-height: 90vh; display: grid; grid-template-columns: 1.55fr .75fr; background: #f5f7fb; border: 1px solid rgba(203,213,225,.9); border-radius: 12px; overflow: hidden; box-shadow: 0 30px 80px rgba(2,8,23,.38); font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
         .whatslink-modal.no-shots { grid-template-columns: 1.1fr .9fr; }
@@ -283,7 +274,6 @@
             .magnet-link { color: #66b0ff; }
             .ed2k-link { color: #ff79b0; }
             .ftp-link { color: #ffd966; }
-            .http-link { color: #6fcf97; }
         }
 
         /* 保留 qiqi777iii 修改版的按钮展示样式 */
@@ -946,12 +936,6 @@
         });
     }
 
-    const linkRegexes = {
-        magnet: /magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^\s<>"]*/g,
-        ed2k: /ed2k:\/\/\|file\|[^|]+\|\d+\|[a-fA-F0-9]{32}\|\/?/gi,
-        ftp: /ftp:\/\/[^\s]+/g
-    };
-
     function decodeLinkValue(value) {
         if (!value) return '';
         try {
@@ -1067,10 +1051,9 @@
                 fragment.appendChild(document.createTextNode(content.slice(lastIndex, match.index)));
             }
             const url = match[0];
-            let type = 'http';
-            if (url.startsWith('magnet:')) type = 'magnet';
-            else if (url.startsWith('ed2k:')) type = 'ed2k';
-            else if (url.startsWith('ftp:')) type = 'ftp';
+            const type = url.startsWith('magnet:')
+                ? 'magnet'
+                : url.startsWith('ed2k:') ? 'ed2k' : 'ftp';
             const link = createStyledLink(url, type);
             link.dataset.magProcessed = 'true';
             fragment.appendChild(link);
@@ -1090,11 +1073,6 @@
 
     function processPage() {
         handleLaosijiTable();
-
-        const processedHrefs = new Set();
-        document.querySelectorAll('a[data-mag-processed="true"]').forEach(a => {
-            if (a.href) processedHrefs.add(a.href);
-        });
 
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
         let node;
@@ -1129,7 +1107,6 @@
                 a.dataset.magRawLink = href;
                 a.after(createBtnGroup(href));
                 a.dataset.magProcessed = 'true';
-                processedHrefs.add(href);
             }
         });
 

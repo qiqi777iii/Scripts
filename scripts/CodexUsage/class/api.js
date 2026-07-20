@@ -80,8 +80,12 @@ class API {
     }
     getUsageByToken(token) {
         return __awaiter(this, void 0, void 0, function* () {
+            const headers = { accept: "application/json", authorization: `Bearer ${token}` };
+            const accountId = extractAccountId(token);
+            if (accountId)
+                headers["ChatGPT-Account-Id"] = accountId;
             const response = yield (0, scripting_1.fetch)(`${this.base}/backend-api/wham/usage`, {
-                headers: { accept: "application/json", authorization: `Bearer ${token}` },
+                headers,
             });
             if (response.status === 401 || response.status === 403) {
                 const err = new Error("TOKEN_INVALID");
@@ -92,12 +96,16 @@ class API {
                 throw new Error(`HTTP_${response.status}`);
             const usage = yield response.json();
             const rl = usage.rate_limit || {};
+            const primary = normalizeWindow(rl.primary_window || rl.five_hour || rl.five_hour_limit || null);
+            const secondary = normalizeWindow(rl.secondary_window || rl.weekly || rl.weekly_limit || rl.monthly || rl.monthly_limit || null);
+            const fiveHour = [primary, secondary].find((w) => Number(w?.limit_window_seconds || 0) > 0 && Number(w.limit_window_seconds) <= 6 * 3600) || primary;
+            const longWindow = [primary, secondary].find((w) => w && w !== fiveHour && Number(w.limit_window_seconds || 0) > 6 * 3600) || (secondary && secondary !== fiveHour ? secondary : null);
             return {
                 email: usage.email || "",
                 plan: normalizePlan(usage.plan_type || ""),
                 rate_limit: {
-                    primary_window: rl.primary_window || null,
-                    secondary_window: rl.secondary_window || null,
+                    primary_window: fiveHour,
+                    secondary_window: longWindow,
                 },
             };
         });
@@ -249,6 +257,32 @@ class API {
             finally { wv.dispose(); }
         });
     }
+}
+function decodeJwtPayload(token) {
+    try {
+        const part = String(token || "").split(".")[1];
+        if (!part)
+            return null;
+        const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
+        const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+        return JSON.parse(atob(padded));
+    }
+    catch (_) {
+        return null;
+    }
+}
+function extractAccountId(token) {
+    const payload = decodeJwtPayload(token);
+    const auth = payload?.["https://api.openai.com/auth"];
+    return auth?.chatgpt_account_id || payload?.chatgpt_account_id || payload?.organizations?.[0]?.id || "";
+}
+function normalizeWindow(value) {
+    if (!value || typeof value !== "object")
+        return null;
+    const window = value.primary_window && value.reset_at == null ? value.primary_window : value;
+    const used = Number(window.used_percent ?? (window.remaining_percent != null ? 100 - Number(window.remaining_percent) : 0));
+    const reset = Number(window.reset_at ?? window.reset_time ?? 0);
+    return Object.assign(Object.assign({}, window), { used_percent: Number.isFinite(used) ? Math.max(0, Math.min(100, used)) : 0, reset_at: Number.isFinite(reset) ? (reset > 100000000000 ? Math.round(reset / 1000) : reset) : 0 });
 }
 function normalizePlan(plan) {
     if (!plan)

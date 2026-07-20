@@ -18,6 +18,7 @@
     const HISTORY_ATTR = 'data-open-video-history';
     const LEGACY_HISTORY_KEY = 'tab-checker:missav-history:v1';
     const MIGRATION_KEY = 'tab-checker:shared-history-migrated:v1';
+    const TITLE_BACKFILL_KEY = 'tab-checker:title-backfill:v1';
     const HISTORY_FILE_NAME = 'video-open-history-v1.json';
     const HISTORY_LIMIT = 5000;
     const STYLE_ID = 'open-video-tab-style';
@@ -46,7 +47,7 @@
     }
 
     function emptyStore() {
-        return { version: 1, updatedAt: 0, records: {} };
+        return { version: 1, records: {} };
     }
 
     function getFileManager() {
@@ -67,24 +68,18 @@
         if (typeof value === 'number' && Number.isFinite(value)) {
             return {
                 code,
-                firstOpenedAt: value,
-                lastOpenedAt: value,
-                openCount: 1,
                 url: `https://missav.ai/${code}`
             };
         }
         if (!value || typeof value !== 'object') return null;
-        const first = Number(value.firstOpenedAt);
-        const last = Number(value.lastOpenedAt);
-        const openedAt = Number.isFinite(first) ? first : (Number.isFinite(last) ? last : Date.now());
         return {
             code,
-            firstOpenedAt: openedAt,
-            lastOpenedAt: Number.isFinite(last) ? last : openedAt,
-            openCount: Math.max(1, Math.floor(Number(value.openCount) || 1)),
             url: typeof value.url === 'string' && /^https?:\/\//i.test(value.url)
                 ? value.url
-                : `https://missav.ai/${code}`
+                : `https://missav.ai/${code}`,
+            title: typeof value.title === 'string' && value.title.trim()
+                ? value.title.trim().slice(0, 300)
+                : undefined
         };
     }
 
@@ -97,10 +92,8 @@
         Object.entries(source)
             .map(function (entry) { return normalizeRecord(entry[0], entry[1]); })
             .filter(Boolean)
-            .sort(function (a, b) { return b.lastOpenedAt - a.lastOpenedAt; })
             .slice(0, HISTORY_LIMIT)
             .forEach(function (record) { store.records[record.code] = record; });
-        store.updatedAt = Number(value.updatedAt) || 0;
         return store;
     }
 
@@ -131,11 +124,9 @@
         if (!manager || !path) throw new Error('Scripting.FileManager is unavailable');
         const records = Object.values(store.records)
             .filter(function (record) { return record && VIDEO_CODE_RE.test(record.code); })
-            .sort(function (a, b) { return b.lastOpenedAt - a.lastOpenedAt; })
             .slice(0, HISTORY_LIMIT);
         store.records = Object.fromEntries(records.map(function (record) { return [record.code, record]; }));
         store.version = 1;
-        store.updatedAt = Date.now();
         await manager.writeAsString(path, JSON.stringify(store), 'utf8');
         syncHistoryCodes(store);
         return true;
@@ -151,6 +142,17 @@
                     if (!record || store.records[record.code]) return;
                     store.records[record.code] = record;
                     changed = true;
+                });
+            }
+            const titles = JSON.parse(localStorage.getItem(TITLE_BACKFILL_KEY) || '{}');
+            if (titles && typeof titles === 'object' && !Array.isArray(titles)) {
+                Object.entries(titles).forEach(function (entry) {
+                    const code = String(entry[0] || '').toLowerCase();
+                    const title = cleanTitle(entry[1], code);
+                    if (store.records[code] && title && !store.records[code].title) {
+                        store.records[code].title = title;
+                        changed = true;
+                    }
                 });
             }
             return { changed, needed: localStorage.getItem(MIGRATION_KEY) !== 'true' };
@@ -177,31 +179,50 @@
         }
     }
 
-    function rememberVideos(videos, countedCode) {
+    function cleanTitle(value, code) {
+        const title = String(value || '')
+            .replace(/\s+/g, ' ')
+            .replace(/\s*[-|–—]\s*MissAV.*$/i, '')
+            .trim();
+        return title && title.toLowerCase() !== String(code || '').toLowerCase()
+            ? title.slice(0, 300)
+            : '';
+    }
+
+    function currentPageTitle(code) {
+        return cleanTitle(
+            document.querySelector('meta[property="og:title"]')?.content
+                || document.querySelector('h1')?.textContent
+                || document.title,
+            code
+        );
+    }
+
+    function rememberVideos(videos) {
         writeQueue = writeQueue.catch(function () {}).then(async function () {
             const store = await readSharedStore();
-            const now = Date.now();
             let changed = false;
-            videos.forEach(function (url, code) {
+            videos.forEach(function (value, code) {
                 if (!VIDEO_CODE_RE.test(code)) return;
+                const details = typeof value === 'string' ? { url: value, title: '' } : (value || {});
+                const title = cleanTitle(details.title, code);
                 const existing = store.records[code];
-                if (!existing) {
-                    store.records[code] = {
-                        code,
-                        firstOpenedAt: now,
-                        lastOpenedAt: now,
-                        openCount: 1,
-                        url: url || `https://missav.ai/${code}`
-                    };
-                    changed = true;
+                if (existing) {
+                    if (!existing.title && title) {
+                        existing.title = title;
+                        changed = true;
+                    }
                     return;
                 }
-                if (code === countedCode) {
-                    existing.lastOpenedAt = now;
-                    existing.openCount = Math.max(1, Math.floor(Number(existing.openCount) || 1)) + 1;
-                    if (url) existing.url = url;
-                    changed = true;
-                }
+                store.records = {
+                    [code]: {
+                        code,
+                        url: details.url || `https://missav.ai/${code}`,
+                        title: title || undefined
+                    },
+                    ...store.records
+                };
+                changed = true;
             });
             if (changed) {
                 await writeSharedStore(store);
@@ -213,10 +234,9 @@
         return writeQueue;
     }
 
-    function setLinkMark(link) {
+    function setLinkMark(link, currentCode) {
         if (!(link instanceof HTMLAnchorElement)) return;
         const code = videoCodeFromUrl(link.getAttribute('href'));
-        const currentCode = videoCodeFromUrl(location.href);
         const isCurrentVideo = Boolean(code && code === currentCode);
         const isCover = link.parentElement?.matches('div.relative.aspect-w-16.aspect-h-9') === true;
         if (!isCurrentVideo && !isCover && code && openCodes.has(code)) {
@@ -233,7 +253,10 @@
 
     function scanPage() {
         scanFrame = 0;
-        document.querySelectorAll('a[href]').forEach(setLinkMark);
+        const currentCode = videoCodeFromUrl(location.href);
+        document.querySelectorAll('a[href]').forEach(function (link) {
+            setLinkMark(link, currentCode);
+        });
     }
 
     function scheduleScan() {
@@ -248,14 +271,17 @@
             const currentCode = videoCodeFromUrl(location.href);
             const seenVideos = new Map();
             const backgroundCodes = new Set();
-            if (currentCode) seenVideos.set(currentCode, location.href);
+            if (currentCode) seenVideos.set(currentCode, {
+                url: location.href,
+                title: currentPageTitle(currentCode)
+            });
             tabs.forEach(function (tab) {
                 const code = videoCodeFromUrl(tab.url);
                 if (!code) return;
-                seenVideos.set(code, tab.url);
+                seenVideos.set(code, { url: tab.url, title: tab.title });
                 if (code !== currentCode && tab.active !== true) backgroundCodes.add(code);
             });
-            await rememberVideos(seenVideos, null);
+            await rememberVideos(seenVideos);
             return backgroundCodes;
         } catch (_) {
             return null;
@@ -282,19 +308,22 @@
         const style = document.createElement('style');
         style.id = STYLE_ID;
         style.textContent = `
-a[${MARK_ATTR}="true"]::before {
-    content: "✓ 已打开";
+a[${MARK_ATTR}="true"]::before,
+a[${HISTORY_ATTR}="true"]::before {
     display: inline-block;
     box-sizing: border-box;
     margin-inline-end: 6px;
     padding: 1px 6px;
     border-radius: 999px;
-    background: rgba(52, 199, 89, .16);
-    color: rgb(48, 170, 78);
     font: 600 10px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
     letter-spacing: 0;
     vertical-align: 2px;
     white-space: nowrap;
+}
+a[${MARK_ATTR}="true"]::before {
+    content: "✓ 已打开";
+    background: rgba(52, 199, 89, .16);
+    color: rgb(48, 170, 78);
 }
 @media (prefers-color-scheme: dark) {
     a[${MARK_ATTR}="true"]::before {
@@ -304,17 +333,8 @@ a[${MARK_ATTR}="true"]::before {
 }
 a[${HISTORY_ATTR}="true"]::before {
     content: "✓ 曾打开";
-    display: inline-block;
-    box-sizing: border-box;
-    margin-inline-end: 6px;
-    padding: 1px 6px;
-    border-radius: 999px;
     background: rgba(142, 142, 147, .16);
     color: rgb(99, 99, 102);
-    font: 600 10px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-    letter-spacing: 0;
-    vertical-align: 2px;
-    white-space: nowrap;
 }
 @media (prefers-color-scheme: dark) {
     a[${HISTORY_ATTR}="true"]::before {
@@ -350,7 +370,21 @@ a[${HISTORY_ATTR}="true"]::before {
         observePage();
         await loadHistory();
         const currentCode = videoCodeFromUrl(location.href);
-        if (currentCode) await rememberVideos(new Map([[currentCode, location.href]]), currentCode);
+        if (currentCode) {
+            const currentTitle = currentPageTitle(currentCode);
+            await rememberVideos(new Map([[
+                currentCode,
+                { url: location.href, title: currentTitle }
+            ]]));
+            if (!currentTitle && document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', function () {
+                    void rememberVideos(new Map([[
+                        currentCode,
+                        { url: location.href, title: currentPageTitle(currentCode) }
+                    ]]));
+                }, { once: true });
+            }
+        }
         scheduleScan();
         window.addEventListener('pageshow', function () { scheduleRefresh(0); });
         window.addEventListener('focus', function () { scheduleRefresh(0); });

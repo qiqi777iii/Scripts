@@ -55,17 +55,6 @@
     } catch (_) {}
   }
 
-  function absorbFloatingUiEvent(e) {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-
-  function isolateFloatingUi(root) {
-    ["pointerdown", "pointerup", "pointercancel", "touchstart", "touchend", "mousedown", "mouseup", "click"].forEach((type) => {
-      root.addEventListener(type, absorbFloatingUiEvent, { passive: false });
-    });
-  }
-
   function visible(el) {
     if (!el || !(el instanceof Element)) return false;
     const style = getComputedStyle(el);
@@ -748,22 +737,6 @@
     return "";
   }
 
-  function isRule34AjaxPaginationLink(el) {
-    const link = el && (el.tagName === "A" ? el : el.closest?.("a[href]"));
-    if (!link || !isRule34Video()) return false;
-    if (link.getAttribute("data-action") !== "ajax") return false;
-    return isRule34PaginationContainer(link);
-  }
-
-  function clickRule34AjaxPagination(link) {
-    if (!link) return;
-    link.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
-    link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-    link.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-    link.click();
-    scheduleEventUpdate();
-  }
-
   function isMissAv() {
     return /(^|\.)missav\.[a-z0-9-]+$/i.test(location.hostname);
   }
@@ -1185,33 +1158,6 @@
     return "";
   }
 
-  function replacePageNumberInUrl(urlLike, oldPage, targetPage) {
-    if (!urlLike || !oldPage || !targetPage) return "";
-    try {
-      const url = new URL(urlLike, location.href);
-      const keys = ["page", "p", "paged", "pg", "pn", "pageNo", "pageNumber"];
-      for (const key of keys) {
-        if (url.searchParams.get(key) === String(oldPage)) {
-          url.searchParams.set(key, String(targetPage));
-          if (isXVideos()) url.hash = `_tabVideos,page-${targetPage}`;
-          return url.href;
-        }
-      }
-      if (isNodeSeek() && /^\/post-\d+-\d+\/?$/i.test(url.pathname)) {
-        url.pathname = url.pathname.replace(/^(\/post-\d+-)\d+(\/?$)/i, `$1${targetPage}$2`);
-        return url.href;
-      }
-
-      const oldEscaped = String(oldPage).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`(^|/)0*${oldEscaped}(/?$|(?=\\.html?$))`);
-      if (re.test(url.pathname)) {
-        url.pathname = url.pathname.replace(re, `$1${targetPage}$2`);
-        return url.href;
-      }
-    } catch (_) {}
-    return "";
-  }
-
   function elementPageNumber(el) {
     if (!el) return "";
     const href = el.href || el.getAttribute?.("href") || "";
@@ -1236,18 +1182,6 @@
     }
 
     return numericText(el);
-  }
-
-  function inferCurrentPageFromAdjacent(prev, next) {
-    const nextPage = parseInt(elementPageNumber(next) || "", 10);
-    if (Number.isFinite(nextPage) && nextPage > 1) return String(nextPage - 1);
-
-    const prevPage = parseInt(elementPageNumber(prev) || "", 10);
-    if (Number.isFinite(prevPage) && prevPage >= 1) return String(prevPage + 1);
-
-    // 分页区只有下一页/右箭头，且 URL 无页码时，通常就是第 1 页。
-    if (next && !pageFromUrl()) return "1";
-    return "";
   }
 
   function findRule34Candidate(direction) {
@@ -1450,25 +1384,6 @@
         scheduleEventUpdate();
       }
     }, 800);
-  }
-
-  function getViewportBox() {
-    const vv = window.visualViewport;
-    // fixed 元素的 left/top 是相对布局视口的；iPhone Safari 地址栏展开/收起、
-    // 刷新加载中、底部地址栏浮起时，visualViewport.height 会临时变小。
-    // 如果用这个临时高度去校正已保存位置，刷新后悬浮窗就会被向上挤。
-    // 所以宽高取 visualViewport / layout viewport / innerWidth-Height 中较大的值，
-    // 只用于防止真正出屏，不让浏览器工具栏的临时变化改写显示位置。
-    const layoutWidth = document.documentElement.clientWidth || innerWidth || 0;
-    const layoutHeight = document.documentElement.clientHeight || innerHeight || 0;
-    return {
-      width: Math.max(1, Math.floor(vv?.width || 0), Math.floor(layoutWidth), Math.floor(innerWidth || 0)),
-      height: Math.max(1, Math.floor(vv?.height || 0), Math.floor(layoutHeight), Math.floor(innerHeight || 0)),
-    };
-  }
-
-  function isXsijisheSignPage() {
-    return /(^|\.)xsijishe\.com$/i.test(location.hostname) && /\/k_misign-sign\.html$/i.test(location.pathname);
   }
 
   function isNodeSeek() {

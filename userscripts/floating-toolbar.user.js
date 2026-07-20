@@ -75,13 +75,6 @@
     };
   }
 
-  function controlIsVisible(control) {
-    if (!control?.isConnected) return false;
-    const style = getComputedStyle(control);
-    const rect = control.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
-  }
-
   function rightAccessoryWidth() {
     // 翻页组件存在时，始终再为最右侧全屏按钮预留一个按钮宽度；按钮显隐时
     // 不移动前六个按钮，同时避免页面出现预览视频后全屏按钮伸出可视区域。

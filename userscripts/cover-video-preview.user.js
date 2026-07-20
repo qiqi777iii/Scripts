@@ -248,7 +248,6 @@
         let previewStartedAt = 0;
         let previewScrollY = null;
         let touch = null;
-        let lastScrollAt = 0;
         let lastScrollY = window.scrollY;
 
         function resetMissAvPreviewState() {
@@ -363,17 +362,11 @@
                 return;
             }
             const point = event.touches[0];
-            const card = findCard(event.target);
-            const now = Date.now();
             touch = {
                 x: point.clientX,
                 y: point.clientY,
-                card,
-                cover: Boolean(card && isCoverTarget(card, event.target)),
-                startedAt: now,
                 scrollY: window.scrollY,
                 moved: false,
-                settled: now - lastScrollAt >= SCROLL_SETTLE_MS,
             };
         }, { capture: true, passive: true });
 
@@ -407,7 +400,6 @@
                 return;
             }
 
-            lastScrollAt = Date.now();
             if (touch) touch.moved = true;
             if (previewScrollY === null) previewScrollY = y;
             if (Math.abs(y - previewScrollY) >= PREVIEW_SCROLL_CANCEL_DISTANCE) cancelPreviewForGesture();

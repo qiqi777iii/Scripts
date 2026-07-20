@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.2.5
+// @version 2.2.7
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -28,6 +28,19 @@
   const CONNECT_OVERLAP = 1
   const FALLBACK_RIGHT = 234
   const BOTTOM_GAP = 40
+
+  function hasBottomAnchor(element) {
+    if (!element) return false
+    const inlineBottom = element.style?.bottom
+    const inlineTop = element.style?.top
+    if (inlineBottom && inlineBottom !== "auto" && (!inlineTop || inlineTop === "auto")) return true
+    try {
+      const computed = getComputedStyle(element)
+      return computed.bottom !== "auto" && computed.top === "auto"
+    } catch (_) {
+      return false
+    }
+  }
 
   let wrap = null
   let button = null
@@ -130,15 +143,6 @@
   function hasBookmark(store, url) {
     const target = normalizeUrl(url)
     return ensureGroups(store).some(group => Array.isArray(group.bookmarks) && group.bookmarks.some(bookmark => normalizeUrl(bookmark?.url || "") === target))
-  }
-
-  function addCurrentPageToGroup(group) {
-    if (!Array.isArray(group.bookmarks)) group.bookmarks = []
-    const url = normalizeUrl(location.href)
-    const exists = group.bookmarks.some(bookmark => normalizeUrl(bookmark?.url || "") === url)
-    if (exists) return false
-    group.bookmarks.unshift({ id: uid(), title: pageTitle(), url, savedAt: now(), read: false })
-    return true
   }
 
   function tabBookmark(tab) {
@@ -355,59 +359,6 @@
     document.documentElement.appendChild(overlay)
   }
 
-  async function saveToDefault() {
-    const { file } = storePath()
-    const store = await loadStore(file)
-    const group = ensureDefaultGroup(store)
-    if (!addCurrentPageToGroup(group)) {
-      showToast("已收藏过")
-      setSavedVisual(true)
-      return
-    }
-    await saveStore(file, store)
-    showToast("已收藏到默认")
-    setSavedVisual(true)
-  }
-
-  async function saveToGroup(groupId) {
-    const { file } = storePath()
-    const store = await loadStore(file)
-    const group = ensureGroups(store).find(item => item && item.id === groupId)
-    if (!group) throw new Error("分组不存在，请刷新页面后重试")
-    if (!addCurrentPageToGroup(group)) {
-      showToast("该分组已收藏过")
-      setSavedVisual(true)
-      return
-    }
-    await saveStore(file, store)
-    showToast(`已收藏到${group.name || DEFAULT_GROUP_NAME}`)
-    setSavedVisual(true)
-  }
-
-  async function createGroupAndSave(name) {
-    const groupName = String(name || "").trim()
-    if (!groupName) {
-      showToast("分组名不能为空")
-      return
-    }
-
-    const { file } = storePath()
-    const store = await loadStore(file)
-    const groups = ensureGroups(store)
-    const existing = groups.find(group => String(group?.name || "").trim() === groupName)
-    if (existing) {
-      await saveToGroup(existing.id)
-      return
-    }
-
-    const group = { id: uid(), name: groupName, createdAt: now(), bookmarks: [] }
-    addCurrentPageToGroup(group)
-    groups.push(group)
-    await saveStore(file, store)
-    showToast(`已新建并收藏到${group.name}`)
-    setSavedVisual(true)
-  }
-
   async function removeCurrentPage() {
     const { file } = storePath()
     const store = await loadStore(file)
@@ -426,13 +377,6 @@
       showToast("未收藏")
     }
     setSavedVisual(false)
-  }
-
-  async function toggleCurrentPage() {
-    const { file } = storePath()
-    const store = await loadStore(file)
-    if (hasBookmark(store, location.href)) await removeCurrentPage()
-    else await saveToDefault()
   }
 
   async function refreshSavedVisual() {
@@ -460,12 +404,6 @@
 #${BUTTON_ID}[data-connected-right="true"]{border-radius:999px 0 0 999px;box-shadow:inset .5px 0 0 var(--combined-separator),inset 0 .5px 0 var(--combined-separator),inset 0 -.5px 0 var(--combined-separator);}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
 #${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:rgba(229,229,234,.96);}
-#${PICKER_ID}{position:fixed;right:8px;bottom:43px;z-index:2147483647;min-width:210px;max-width:min(300px,calc(100vw - 32px));max-height:min(420px,calc(100vh - 120px));overflow:auto;padding:10px;border-radius:18px;background:rgba(255,255,255,.84);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%);border:1px solid rgba(60,60,67,.16);box-shadow:0 10px 30px rgba(0,0,0,.18);font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#111;}
-#${PICKER_ID} .qts-title{font-size:13px;font-weight:600;color:#6b6b72;padding:4px 8px 8px;}
-#${PICKER_ID} button{width:100%;border:0;background:transparent;color:inherit;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 8px;border-radius:12px;text-align:left;font-size:15px;font-weight:500;-webkit-tap-highlight-color:transparent;}
-#${PICKER_ID} button:active{background:rgba(0,122,255,.12);}
-#${PICKER_ID} .qts-create{color:#007AFF;font-weight:600;justify-content:flex-start;}
-#${PICKER_ID} .qts-count{font-size:12px;color:#8E8E93;font-weight:500;}
 #${TOAST_ID}{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.76);color:white;font:14px/18px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .2s;pointer-events:none;}
 #${DIALOG_ID}{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.34);font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#111;}
 #${DIALOG_ID} .qts-dialog-card{width:min(360px,calc(100vw - 32px));max-height:calc(100vh - 32px);display:flex;flex-direction:column;padding:24px 20px 18px;border-radius:24px;background:rgba(248,248,248,.96);-webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);box-shadow:0 20px 60px rgba(0,0,0,.28);}
@@ -501,7 +439,7 @@
 #${DIALOG_ID} .qts-dialog-cancel{background:#E5E5EA;color:#111;}
 #${DIALOG_ID} .qts-dialog-save{background:#7C4DFF;color:#fff;}
 #${DIALOG_ID} button:disabled{opacity:.55;}
-@media (prefers-color-scheme:dark){#${BUTTON_ID}{--combined-separator:rgba(255,255,255,.16);background:rgba(44,44,46,.82);color:rgba(255,255,255,.94);}#${BUTTON_ID}[data-saved="true"]{color:#30D158;}#${PICKER_ID}{background:rgba(28,28,30,.78);border-color:rgba(255,255,255,.12);color:#fff;}#${PICKER_ID} .qts-title{color:#98989F;}#${DIALOG_ID}{color:#fff;}#${DIALOG_ID} .qts-dialog-card{background:rgba(28,28,30,.96);}#${DIALOG_ID} .qts-dialog-cancel,#${DIALOG_ID} .qts-dialog-group,#${DIALOG_ID} .qts-dialog-new-group{background:#3A3A3C;color:#fff;}#${DIALOG_ID} input[type="radio"]:checked{background-color:#1C1C1E!important;}}
+@media (prefers-color-scheme:dark){#${BUTTON_ID}{--combined-separator:rgba(255,255,255,.16);background:rgba(44,44,46,.82);color:rgba(255,255,255,.94);}#${BUTTON_ID}[data-saved="true"]{color:#30D158;}#${DIALOG_ID}{color:#fff;}#${DIALOG_ID} .qts-dialog-card{background:rgba(28,28,30,.96);}#${DIALOG_ID} .qts-dialog-cancel,#${DIALOG_ID} .qts-dialog-group,#${DIALOG_ID} .qts-dialog-new-group{background:#3A3A3C;color:#fff;}#${DIALOG_ID} input[type="radio"]:checked{background-color:#1C1C1E!important;}}
 `
     ;(document.head || document.documentElement).appendChild(style)
   }
@@ -585,9 +523,12 @@
         const pos = clampPos(rect.left - INITIAL_GAP - BTN_SIZE + CONNECT_OVERLAP, rect.top)
         wrap.style.left = pos.left + "px"
         wrap.style.right = "auto"
-        const usesBottom = neighbor.style.bottom && neighbor.style.bottom !== "auto" && (!neighbor.style.top || neighbor.style.top === "auto")
-        if (usesBottom) {
-          wrap.style.bottom = neighbor.style.bottom
+        // 新标签页工具栏通常用 bottom 锚定。不能只看 inline style：
+        // Safari/其他悬浮脚本可能通过 CSS 或稍后的布局阶段设置 bottom，
+        // 此时读取 rect.top 会把收藏按钮固定在旧的视觉视口坐标，点击新标签页按钮后就会上下错位。
+        if (hasBottomAnchor(neighbor)) {
+          const computed = getComputedStyle(neighbor)
+          wrap.style.bottom = computed.bottom
           wrap.style.top = "auto"
         } else {
           wrap.style.top = pos.top + "px"
@@ -685,32 +626,8 @@
     showToast.timer = setTimeout(() => { toast.style.opacity = "0" }, 1500)
   }
 
-  function positionPicker(picker) {
-    if (!wrap) return
-    const rect = wrap.getBoundingClientRect()
-    const viewport = getViewportBox()
-    const margin = 8
-    const pw = picker.offsetWidth || 240
-    const ph = picker.offsetHeight || 320
-    let left = rect.right - pw
-    left = Math.max(margin, Math.min(left, viewport.width - pw - margin))
-    let top = rect.top - margin - ph
-    if (top < margin) {
-      const below = rect.bottom + margin
-      top = (below + ph <= viewport.height - margin) ? below : Math.max(margin, viewport.height - ph - margin)
-    }
-    picker.style.left = Math.round(left) + "px"
-    picker.style.top = Math.round(top) + "px"
-    picker.style.right = "auto"
-    picker.style.bottom = "auto"
-  }
-
   function escapeHtml(text) {
     return String(text).replace(/[&<>"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]))
-  }
-
-  function closeGroupPicker() {
-    document.getElementById(PICKER_ID)?.remove()
   }
 
   function installPositionListeners() {

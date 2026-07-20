@@ -23,8 +23,6 @@ import type {
 } from "../types"
 import { isAssistantTranslationAvailable } from "../utils/assistant_translation_engine"
 import { isExternalEngineConfigured } from "../utils/external_translation_engines"
-import { isLocalTranslationAvailable } from "../utils/translation_engine"
-import { isSystemTranslationAvailable } from "../utils/system_translation_engine"
 import {
   addAiApiEngine,
   addDeepLxEngine,
@@ -50,16 +48,8 @@ function canDeleteEngine(engine: TranslatorEngineEntry) {
 }
 
 function isEngineAvailable(engine: TranslatorEngineEntry) {
-  if (engine.kind === "apple_intelligence") {
-    return isLocalTranslationAvailable()
-  }
-
   if (engine.kind === "assistant") {
     return isAssistantTranslationAvailable()
-  }
-
-  if (engine.kind === "system_translation") {
-    return isSystemTranslationAvailable()
   }
 
   if (

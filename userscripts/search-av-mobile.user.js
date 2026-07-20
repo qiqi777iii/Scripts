@@ -9,7 +9,7 @@
 // @modification 手机复制兼容，MissAV 简中搜索，添加 BTSOW 搜索
 // @icon         data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAAXNSR0IArs4c6QAABLdJREFUWEftmG2IVGUUx3//O6MZapIftJTeKAqDiqiPGllZSdqHXsw3KmNnpm1LzYqgAleoMAJLw2xmdtsKqS3BkIy0QDSS6FNIkAgRilhUkPjGprtzTzx3d2fv3L0z986upB+6X+855/6e5znnf55zZWYTOY8fOUBJJ85HxoDtf8BRHM2odtAM0cF0fC6oMnicpoUjEjYKrqpr04DWxTjOsNQ8Chg3AWNiQHoR++RTZCybtYx/RgqbGtA6mej3sVziRaCZqj9h0O79xga109csaCpAK3KDiW7g+mY/ELL/WcZCFfipmRiJgFZinsFHwMXNBK5je1SwSHl2po3VENBKzDWjG3FRQkCXY8chsBvX0NY4LrFQeb5KA1kX0Dq5zip8DVweE8gHDkis5Qxb1cbJQRvbyASyLDHxPHBNLIRxQD53qpUjSZCxgE4+/BKfSDwSE+CU4FlydDSSEmsn61/KCok1wPhoHIP3vRwtSXIUD1jkbhNbYwIPy6FgMWWeE8wyY3emwFthGHuP+SY2x6TJUXnMVwt7G+3iMED3QSuzBXgw4tgjn6V6MgAfEtIOJpvPLgg0cZ887lALf9fYlGkzC8BrNNOgnMmTbw6wzFVuJ6K5V+9ILA1g/ZQ5pF5mqY3D9SCH72CRxSY+BLJD28RxwX0q8N2wXEoB6HysyEyDLyNHfXpAdj5PDVgp8aYIKjD8/KBe7gpXa7Vq0wLW2g2t3ViTKdCeGtAv8xnGwzU5BB9k8iwLLgdF5iGuGHzve1won2cQl2EcNo93PJ+e0O4fosB2V61+iS+AeTWxjY2ZAk+nByyxA7gnArg+k2elFbnaFFTd1CT9Cr2vFk6lxNuCFRHfnV6ee88OYH8BuTycdhYBt3t55qcGrJToEjxe4yC2eDkWBMnewWQqNX15UqBzMAPYL2MpcKzqn+HooOz4DU4nPWCRdonVEYdYfRsETtLBwG4jl9gY9gDXhmML2pTn3dSAFt9FegQLlGf7iGWmzKNmdNbIF5yS8YAKQc+PfYbr4CamWCYQandk4We3xjA3ejtOJdT9EuMgbonE3K8Kt6uVP1MDOsNKkdckXoo4+WZs8PKsCjf4GkDjR8FsFYZycODisU5iOeBFJOb1TIGXGxVc/GWhzAwzvgGmR5x7DVZ7OdbWQJaZis8EQgUR5F1/i3tV4oWY2eWgKsxWKwebBgx2scQawSvRVQPuLrhNWQp6gr/qHs0mplsmyLk5MTH6XLdSnvVJclX/wtrFOOvlU+D+OkF6gV2CbjJ8Tx99ZMnSxywTi4GZdSa+wXB7VGFBo/zrP4UGfxbMFYzHDsTNSSsd4ftEyOShqZNp5rMN49YRQiS5NYRMBAy22c3EleCWk4vJpyQA994NVa4YnEjXVPKAc13IVICDBFbmRrMgsW9LCeoK6lsZrfzOL/401rnO0QxkU4BV0E1M8bM8Jp9FiCuBSQMfdUDHMA66mcar0BWe3IJBqknIEQGmOdP6nSHQxljhjjvu/xwwJOB1IcPD1DkBTAG5VyeZo1X0nDPARpAmPs7kWJIo1KPJtbS+A/36DYmVQedxF44KD+kpfj0vAKvK4P7pjGW8cvxRe+MZaHVpV3wu7P4FjSUI5qMsu14AAAAASUVORK5CYII=
 // @license      MIT
-// @match        *://**/*
+// @match        *://*/*
 // @require     https://update.greasyfork.org/scripts/447533/1214813/findAndReplaceDOMText%20v%20046.js
 // @require     https://update.greasyfork.org/scripts/452219/1099124/MD5%20%E5%87%BD%E6%95%B0.js
 // @require     https://update.greasyfork.org/scripts/452792/1214814/av%E7%95%AA%E5%8F%B7%E7%89%B9%E5%BE%81%28tag%29%E5%AF%B9%E7%85%A7%E8%A1%A8.js
@@ -233,8 +233,19 @@
             }
             if(btsowItem && missavIndex > -1){
                 next.splice(missavIndex + 1,0,btsowItem);
-                changed = true;
-                return next;
+                var orderChanged = next.length !== list.length;
+                if(!orderChanged){
+                    for(var j=0;j<list.length;j++){
+                        if(next[j] !== list[j]){
+                            orderChanged = true;
+                            break;
+                        }
+                    }
+                }
+                if(orderChanged){
+                    changed = true;
+                    return next;
+                }
             }
             return list;
         }
@@ -1647,65 +1658,11 @@
                 return
             };
             getInfo_fc2(avID);
-            // getInfo_fc2_market(avID);
         }else{
             getInfo_wuma_javdb1(avID);
         }
     }
     // 无码信息获取 - fc2
-    function getInfo_fc2_market(avID){
-        if(debug){console.log("从fc2hub获取信息中 getInfo_fc2_market: " + avID);}
-        
-        let IDnum = avID.slice(4)
-        let link = `https://adult.contents.fc2.com/article/${IDnum}/`
-        console.log(link)
-
-        GM_xmlhttpRequest({
-            method: 'get',
-            // https://contents.fc2.com/article/3107706/
-            url: link,
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded"
-            },
-            data: "",
-            onload: function (data) {
-                console.log(data);
-                let parser=new DOMParser();
-                let htmlDoc=parser.parseFromString(data.responseText, "text/html");
-                console.log(htmlDoc)
-                let info = htmlDoc.querySelector(".items_article_headerInfo");
-
-                // 标题
-                let title = htmlDoc.title.replace("PPV-","").replace(avID,"").trim();
-                // 番号的链接
-                // let link = link;
-                // 获取名字
-                // 获取标签
-                let tags = info.querySelector(".items_article_TagArea div").innerText
-                // 获取日期
-                let d = info.querySelector(".items_article_Releasedate").innerText.slice(7).replaceAll("/","-");
-                
-                // 获取图片
-                let img = htmlDoc.querySelector(".items_article_SampleImages a").href;
-                // 获取视频
-                let video = htmlDoc.querySelector(".fc2-video-container video");
-                console.log(video);
-                if(video){
-                    console.log(video);
-                    var videoURL = video.src;
-                    var img2 = video.poster;
-                }
-
-                console.log(link)
-                console.log(title)
-                console.log(tags)
-                console.log(d)
-                console.log(img)
-                console.log(img2)
-                console.log(videoURL)
-            }
-        });
-    }
     function getInfo_fc2(avID){
         if(debug){console.log("从fc2hub获取信息中 getInfo_fc2: " + avID);}
 

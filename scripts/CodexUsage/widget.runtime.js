@@ -33,12 +33,15 @@ function withTimeout(p, ms) {
 }
 (() => __awaiter(void 0, void 0, void 0, function* () {
     let accounts = api_1.api.getAccountStates().map((state) => Object.assign(Object.assign({}, state), { stale: !!state.usage }));
-    if (!accounts.some((a) => a.usage)) {
+    try {
         const live = yield withTimeout(api_1.api.getAllUsage(), 12000);
         accounts = live.map((item) => ({ slot: item.slot, configured: item.configured, usage: item.usage, stale: !!item.error }));
     }
+    catch (_) {
+        // 网络超时保留每个账号各自的缓存，不让整个小组件失效。
+    }
     const first = accounts.find((a) => a.usage);
-    const percent = Math.round(first?.usage?.rate_limit?.primary_window?.used_percent || 0);
+    const percent = Math.max(0, Math.min(100, Math.round(100 - (first?.usage?.rate_limit?.primary_window?.used_percent || 0))));
     switch (scripting_1.Widget.family) {
         case "accessoryCircular":
             scripting_1.Widget.present(createElement(scripting_1.Button, { intent: (0, app_intents_1.ReloadIntent)(undefined), buttonStyle: "plain" }, createElement(circular_1.View, { percent })));

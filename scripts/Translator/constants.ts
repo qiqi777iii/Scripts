@@ -41,22 +41,10 @@ export const LANGUAGE_OPTIONS: LanguageOption[] = [
 
 export const TRANSLATION_ENGINE_OPTIONS: TranslationEngineOption[] = [
   {
-    id: "apple_intelligence",
-    label: "Apple Intelligence",
-    systemImage: "apple.intelligence",
-    isDefault: true,
-  },
-  {
     id: "assistant",
     label: "Scripting Assistant",
     systemImage: "chevron.left.forwardslash.chevron.right",
     isDefault: false,
-  },
-  {
-    id: "system_translation",
-    label: "System Translate",
-    systemImage: "apple.logo",
-    isDefault: true,
   },
   {
     id: "google_translate",
