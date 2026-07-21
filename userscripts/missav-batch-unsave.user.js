@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MissAV 批量取消收藏
 // @namespace    https://missav.ai/
-// @version      1.2.1
+// @version      1.0.1
 // @description  在收藏页一键取消所有收藏影片，自动翻页、实时进度、支持暂停。已测试，API 稳定可用。
 // @author       Minis
 // @match        https://missav.ai/saved*
