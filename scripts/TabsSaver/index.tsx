@@ -40,16 +40,12 @@ import {
   cleanupExpiredTrash,
   removeBookmark,
   removeBookmarks,
-  markBookmarkRead,
   normalizeOrders,
   applyGroupOrder,
   totalBookmarkCount,
   getFavorites,
   addFavorite,
   isFavorited,
-  removeFavorite,
-  removeFavorites,
-  markFavoriteRead,
   type Group,
   type Bookmark,
   type Store,
@@ -125,13 +121,13 @@ function dayLabel(ts: number): string {
   return `${d.getFullYear()}年${pad(d.getMonth() + 1)}月${pad(d.getDate())}日`
 }
 
-type DaySection = { key: number; label: string; items: Bookmark[] }
+type DaySection = { id: string; key: number; label: string; items: Bookmark[] }
 
 const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
 const SHOW_FAVORITES_KEY = "tab.showFavorites"
-const APP_VERSION = "2.2.7"
+const APP_VERSION = "2.2.9"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = {
   version: string
@@ -140,6 +136,24 @@ type ChangelogEntry = {
   items: string[]
 }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "2.2.9",
+    date: "2026-07-22",
+    summary: "重构动态列表刷新",
+    items: [
+      "分组和收藏列表改用原生 Observable + ForEach 数据源，单条及多选删除会立即移除当前行。",
+      "移动和已读状态也会通过同一动态列表数据源即时刷新。",
+    ],
+  },
+  {
+    version: "2.2.8",
+    date: "2026-07-22",
+    summary: "修复列表状态刷新",
+    items: [
+      "多选删除后立即刷新当前列表，不再需要重新进入页面。",
+      "打开未读收藏后立即更新为已读，分组和收藏列表均已修复。",
+    ],
+  },
   {
     version: "2.2.1",
     date: "2026-07-17",
@@ -323,6 +337,18 @@ function backupDetailLabel(backup: CloudBackup): string {
   return `${size} · 新增 ${diff.added} · 删除 ${diff.removed}`
 }
 
+function daySectionId(key: number, items: Bookmark[]): string {
+  let hash = 2166136261
+  for (const item of items) {
+    const value = `${item.id}:${item.read ? 1 : 0}`
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index)
+      hash = Math.imul(hash, 16777619)
+    }
+  }
+  return `${key}:${items.length}:${hash >>> 0}`
+}
+
 function groupByDay(bookmarks: Bookmark[]): DaySection[] {
   const map = new Map<number, Bookmark[]>()
   for (const b of bookmarks) {
@@ -334,7 +360,7 @@ function groupByDay(bookmarks: Bookmark[]): DaySection[] {
   const keys = Array.from(map.keys()).sort((a, b) => b - a)
   return keys.map(k => {
     const items = map.get(k)!.sort((a, b) => b.savedAt - a.savedAt)
-    return { key: k, label: dayLabel(k), items }
+    return { id: daySectionId(k, items), key: k, label: dayLabel(k), items }
   })
 }
 
@@ -1298,9 +1324,12 @@ function GroupView({ groupId }: { groupId: string }) {
   const [loaded, setLoaded] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  const sections = useObservable<DaySection[]>([])
 
   async function reload() {
     const s = await loadStore()
+    const nextGroup = s.groups.find((item: Group) => item.id === groupId)
+    sections.setValue(groupByDay(nextGroup?.bookmarks ?? []))
     setStore({ ...s })
     setLoaded(true)
   }
@@ -1309,10 +1338,17 @@ function GroupView({ groupId }: { groupId: string }) {
 
   async function onDelete(bookmarkId: string) {
     if (!group) return
-    moveBookmarksToTrash(store, group, [bookmarkId])
-    setStore({ ...store })
+    const nextGroup: Group = { ...group, bookmarks: [...group.bookmarks] }
+    const nextStore: Store = {
+      ...store,
+      groups: store.groups.map(item => item.id === group.id ? nextGroup : item),
+      trash: store.trash ? [...store.trash] : undefined,
+    }
+    moveBookmarksToTrash(nextStore, nextGroup, [bookmarkId])
+    sections.setValue(groupByDay(nextGroup.bookmarks))
+    setStore(nextStore)
     setSelected(selected.filter(id => id !== bookmarkId))
-    await saveStore(store)
+    await saveStore(nextStore)
   }
 
   async function chooseMoveTarget(title: string): Promise<Group | null> {
@@ -1343,6 +1379,7 @@ function GroupView({ groupId }: { groupId: string }) {
     const target = await chooseMoveTarget("移动到分组")
     if (!target) return
     if (moveBookmark(store, group.id, bookmarkId, target.id)) {
+      sections.setValue(groupByDay(group.bookmarks))
       await saveStore(store)
       setStore({ ...store })
     }
@@ -1350,9 +1387,22 @@ function GroupView({ groupId }: { groupId: string }) {
 
   async function openBookmark(b: Bookmark) {
     if (group && !b.read) {
-      markBookmarkRead(group, b.id)
-      await saveStore(store)
-      setStore({ ...store })
+      const nextStore: Store = {
+        ...store,
+        groups: store.groups.map(item =>
+          item.id === group.id
+            ? {
+                ...item,
+                bookmarks: item.bookmarks.map(bookmark =>
+                  bookmark.id === b.id ? { ...bookmark, read: true } : bookmark,
+                ),
+              }
+            : item,
+        ),
+      }
+      sections.setValue(groupByDay(nextStore.groups.find(item => item.id === group.id)?.bookmarks ?? []))
+      setStore(nextStore)
+      await saveStore(nextStore)
     }
     Safari.openURL(b.url)
   }
@@ -1400,6 +1450,7 @@ function GroupView({ groupId }: { groupId: string }) {
     if (!target) return
     const moved = moveBookmarks(store, group.id, selected, target.id)
     if (moved === 0) return
+    sections.setValue(groupByDay(group.bookmarks))
     await saveStore(store)
     setStore({ ...store })
     exitSelect()
@@ -1412,10 +1463,17 @@ function GroupView({ groupId }: { groupId: string }) {
       message: "可以稍后从回收站恢复。",
     })
     if (!ok) return
-    moveBookmarksToTrash(store, group, selected)
-    setStore({ ...store })
+    const nextGroup: Group = { ...group, bookmarks: [...group.bookmarks] }
+    const nextStore: Store = {
+      ...store,
+      groups: store.groups.map(item => item.id === group.id ? nextGroup : item),
+      trash: store.trash ? [...store.trash] : undefined,
+    }
+    moveBookmarksToTrash(nextStore, nextGroup, selected)
+    sections.setValue(groupByDay(nextGroup.bookmarks))
+    setStore(nextStore)
     exitSelect()
-    await saveStore(store)
+    await saveStore(nextStore)
   }
 
   const allSelected =
@@ -1544,9 +1602,11 @@ function GroupView({ groupId }: { groupId: string }) {
           {group.bookmarks.length === 0 ? (
             <Text foregroundStyle="secondaryLabel">这个分组还没有收藏</Text>
           ) : (
-            groupByDay(group.bookmarks).map((sec: DaySection) => (
+            <ForEach
+              data={sections}
+              builder={(sec: DaySection) => (
           <Section
-            key={sec.key}
+            key={sec.id}
             header={
               <Text font="footnote" foregroundStyle="secondaryLabel">
                 {sec.label} · {sec.items.length}
@@ -1665,7 +1725,8 @@ function GroupView({ groupId }: { groupId: string }) {
               )
             })}
           </Section>
-            ))
+              )}
+            />
           )}
         </>
       )}
@@ -1797,9 +1858,11 @@ function FavoritesView() {
   const [loaded, setLoaded] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  const sections = useObservable<DaySection[]>([])
 
   async function reload() {
     const s = await loadStore()
+    sections.setValue(groupByDay(getFavorites(s)))
     setStore({ ...s })
     setLoaded(true)
   }
@@ -1807,17 +1870,27 @@ function FavoritesView() {
   const favorites = getFavorites(store)
 
   async function onDelete(id: string) {
-    removeFavorite(store, id)
-    setStore({ ...store })
+    const nextStore: Store = {
+      ...store,
+      favorites: getFavorites(store).filter(bookmark => bookmark.id !== id),
+    }
+    sections.setValue(groupByDay(nextStore.favorites ?? []))
+    setStore(nextStore)
     setSelected(selected.filter(x => x !== id))
-    await saveStore(store)
+    await saveStore(nextStore)
   }
 
   async function openBookmark(b: Bookmark) {
     if (!b.read) {
-      markFavoriteRead(store, b.id)
-      await saveStore(store)
-      setStore({ ...store })
+      const nextStore: Store = {
+        ...store,
+        favorites: getFavorites(store).map(bookmark =>
+          bookmark.id === b.id ? { ...bookmark, read: true } : bookmark,
+        ),
+      }
+      sections.setValue(groupByDay(nextStore.favorites ?? []))
+      setStore(nextStore)
+      await saveStore(nextStore)
     }
     Safari.openURL(b.url)
   }
@@ -1852,10 +1925,15 @@ function FavoritesView() {
       message: "仅从收藏移除，不影响各标签组。",
     })
     if (!ok) return
-    removeFavorites(store, selected)
-    setStore({ ...store })
+    const selectedIds = new Set(selected)
+    const nextStore: Store = {
+      ...store,
+      favorites: getFavorites(store).filter(bookmark => !selectedIds.has(bookmark.id)),
+    }
+    sections.setValue(groupByDay(nextStore.favorites ?? []))
+    setStore(nextStore)
     exitSelect()
-    await saveStore(store)
+    await saveStore(nextStore)
   }
 
   const allSelected =
@@ -1964,9 +2042,11 @@ function FavoritesView() {
       ) : favorites.length === 0 ? (
         <Text foregroundStyle="secondaryLabel">收藏还是空的，在标签组里右滑收藏。</Text>
       ) : (
-        groupByDay(favorites).map((sec: DaySection) => (
+        <ForEach
+          data={sections}
+          builder={(sec: DaySection) => (
           <Section
-            key={sec.key}
+            key={sec.id}
             header={
               <Text font="footnote" foregroundStyle="secondaryLabel">
                 {sec.label} · {sec.items.length}
@@ -2068,7 +2148,8 @@ function FavoritesView() {
               )
             })}
           </Section>
-        ))
+          )}
+        />
       )}
     </List>
   )
