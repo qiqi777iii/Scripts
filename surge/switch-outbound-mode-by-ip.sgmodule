@@ -1,5 +1,5 @@
 #!name=根据出口IP切换出站模式
-#!desc=网络变化后通过 ipinfo 检查 DIRECT 出口；中国 IP 使用规则模式，非中国 IP 使用直接连接。
+#!desc=网络变化时先进入 Rule 安全模式，仅通过 IPPure 检查 DIRECT 出口；中国 IP 使用规则模式，非中国 IP 使用直接连接，检测失败保持 Rule。
 #!author=Qi Qi
 #!homepage=https://github.com/qiqi777iii/Scripts
 
