@@ -1,0 +1,40 @@
+{
+  "localizedNames" : {
+    "en" : "Media Downloader",
+    "zh" : "媒体下载"
+  },
+  "description" : "从分享菜单接收抖音、YouTube 或 m3u8 链接，自动选择对应下载器下载媒体，可保存到相册或导出到文件。",
+  "icon" : "square.and.arrow.down",
+  "name" : "Media Downloader",
+  "runInApp" : true,
+  "entry" : "index.tsx",
+  "version" : "2.11.8",
+  "remoteResource" : {
+    "autoUpdateInterval" : 600,
+    "url" : "https:\/\/github.com\/qiqi777iii\/Scripts\/tree\/main\/scripts\/MediaDownloader",
+    "hash" : "5e806fbf4164d67642183649a29f1944"
+  },
+  "intentInputTypes" : [
+    "URLs",
+    "Text"
+  ],
+  "iconImage" : "",
+  "color" : "rgba(30, 144, 255, 1)",
+  "contributors" : [
+    {
+      "homepage" : "https:\/\/github.com\/BlackCCCat\/Scripting-Scripts",
+      "name" : "BlackCCCat",
+      "email" : null
+    }
+  ],
+  "localizedDescriptions" : {
+    "zh" : "从分享菜单接收抖音、YouTube 或 m3u8 链接，自动选择对应下载器下载媒体，可保存到相册或导出到文件。",
+    "en" : "Receive Douyin, YouTube, or m3u8 links, download media with the matching downloader, and save to Photos or export to Files."
+  },
+  "author" : {
+    "homepage" : null,
+    "email" : "",
+    "name" : "OpenAI Assistant"
+  },
+  "permissions" : null
+}
