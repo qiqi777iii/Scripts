@@ -1,11 +1,10 @@
 # Scripts
 
-集中维护和分发 userscript、Surge 模块与 Scripting App 脚本包。
+集中维护和分发 userscript 与 Scripting App 脚本包。
 
 ## 仓库结构
 
 - `userscripts/`：可直接安装到 userscript 管理器的浏览器脚本。
-- `surge/`：Surge 模块及其配套脚本。
 - `scripts/`：可导入 Scripting App 的完整脚本包。
 
 ## Userscript
@@ -23,12 +22,6 @@
 | 视频全屏按钮 | 检测网页视频，通过悬浮按钮自动播放并切换全屏。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js) |
 | 番号快速搜索 | 识别并标记网页中的番号，提供常用网站快捷搜索。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/search-av-mobile.user.js) |
 
-## Surge 模块
-
-| 模块 | 功能 | 安装 |
-| --- | --- | --- |
-| 根据出口 IP 切换出站模式 | 网络变化后通过 ipinfo 检查 DIRECT 出口；中国 IP 使用规则模式，非中国 IP 使用直接连接。 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/switch-outbound-mode-by-ip.sgmodule) |
-
 ## Scripting App 脚本包
 
 | 脚本包 | 功能 | 项目链接 |
@@ -44,10 +37,6 @@
 ### Userscript
 
 点击对应的“安装”链接，通过支持 userscript 的浏览器扩展导入。脚本已配置 GitHub Raw 更新地址的，可由管理器检查后续版本。
-
-### Surge 模块
-
-点击模块的“安装”链接，将 Raw 地址添加到 Surge。模块会自动引用同目录下的配套 JavaScript，不需要单独安装脚本文件。
 
 ### Scripting App 脚本包
 
