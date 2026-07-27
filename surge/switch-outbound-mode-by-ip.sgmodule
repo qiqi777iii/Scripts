@@ -1,7 +1,0 @@
-#!name=根据出口IP切换出站模式
-#!desc=网络变化时先进入 Rule 安全模式，仅通过 IPPure 检查 DIRECT 出口；中国 IP 使用规则模式，非中国 IP 使用直接连接，检测失败保持 Rule。
-#!author=Qi Qi
-#!homepage=https://github.com/qiqi777iii/Scripts
-
-[Script]
-根据出口IP切换出站模式 = type=event,event-name=network-changed,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/switch-outbound-mode-by-ip.js,timeout=45,engine=jsc
