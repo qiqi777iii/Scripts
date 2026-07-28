@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         番号快速搜索
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.0
+// @version      1.0.1
 // @description  识别并标记网页中的番号，提供常用网站快捷搜索。
 // @author       iqxin
 // @modifiedBy   QiQi
@@ -105,7 +105,8 @@
 // @grant       GM_openInTab
 // @run-at      document-idle
 
-// @downloadURL none
+// @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/search-av-mobile.user.js
+// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/search-av-mobile.user.js
 // ==/UserScript==
 
 (function() {
