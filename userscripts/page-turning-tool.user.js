@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.3
+// @version      1.2.4
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并在悬浮工具栏右侧显示独立翻页按钮。
@@ -15,6 +15,15 @@
 
 (() => {
   "use strict";
+
+  const INSTANCE_KEY = "__pageTurningToolInstanceV1__";
+  const previousInstance = document[INSTANCE_KEY];
+  if (previousInstance?.resume) {
+    previousInstance.resume("reinjected");
+    return;
+  }
+  const INSTANCE = { phase: "starting", resume: null };
+  document[INSTANCE_KEY] = INSTANCE;
 
   const SCRIPT_ID = "floating-page-navigation";
   const STYLE_ID = `${SCRIPT_ID}-style`;
@@ -34,9 +43,19 @@
     navigating: false,
     initialized: false,
     observer: null,
+    toolbar: null,
+    styleElement: null,
+    prevButton: null,
+    nextButton: null,
+    retryTimer: null,
+    listenersInstalled: false,
     pagerObserver: null,
     observedPagerRoot: null,
     updateTimer: null,
+    idleHandle: null,
+    idleUsesRequestCallback: false,
+    updateInFlight: false,
+    updateDirty: false,
     fallbackTimer: null,
     fallbackAttempt: 0,
     toolbarObserver: null,
@@ -1595,7 +1614,10 @@
   }
 
   function addStyles() {
-    if (document.getElementById(STYLE_ID)) return;
+    const existingStyle = document.getElementById(STYLE_ID);
+    if (existingStyle === STATE.styleElement && STATE.styleElement?.isConnected) return;
+    existingStyle?.remove?.();
+    if (STATE.styleElement && STATE.styleElement !== existingStyle) STATE.styleElement.remove?.();
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = `
@@ -1667,6 +1689,7 @@
         }
       }
     `;
+    STATE.styleElement = style;
     document.documentElement.appendChild(style);
   }
 
@@ -1701,7 +1724,15 @@
   function createToolbar() {
     addStyles();
     let box = document.getElementById(SCRIPT_ID);
-    if (box) return box;
+    if (
+      box &&
+      box === STATE.toolbar &&
+      box.isConnected &&
+      box.querySelector(".prev") === STATE.prevButton &&
+      box.querySelector(".next") === STATE.nextButton
+    ) return box;
+    box?.remove();
+    if (STATE.toolbar && STATE.toolbar !== box) STATE.toolbar.remove?.();
     box = document.createElement("div");
     box.id = SCRIPT_ID;
     box.dataset.connectedLeft = "false";
@@ -1717,8 +1748,13 @@
       </button>`;
     isolateUi(box);
     document.documentElement.appendChild(box);
-    bindAction(box.querySelector(".prev"), "prev");
-    bindAction(box.querySelector(".next"), "next");
+    const prevButton = box.querySelector(".prev");
+    const nextButton = box.querySelector(".next");
+    bindAction(prevButton, "prev");
+    bindAction(nextButton, "next");
+    STATE.toolbar = box;
+    STATE.prevButton = prevButton;
+    STATE.nextButton = nextButton;
     applyPosition(box);
     return box;
   }
@@ -1726,7 +1762,15 @@
   function ensureToolbar() {
     if (!document.getElementById(STYLE_ID)) addStyles();
     const box = document.getElementById(SCRIPT_ID);
-    if (!box || !box.querySelector(".prev") || !box.querySelector(".next")) {
+    if (
+      !box ||
+      box !== STATE.toolbar ||
+      !box.isConnected ||
+      document.getElementById(STYLE_ID) !== STATE.styleElement ||
+      !STATE.styleElement?.isConnected ||
+      box.querySelector(".prev") !== STATE.prevButton ||
+      box.querySelector(".next") !== STATE.nextButton
+    ) {
       box?.remove();
       return createToolbar();
     }
@@ -1736,26 +1780,65 @@
 
   async function updateToolbar() {
     if (STATE.navigating) return;
-    const numericPager = safeCall("数字分页识别失败", detectNumericPager, null);
-    STATE.numericPager = numericPager;
-    observePagerRoot(numericPager?.root || null);
-    STATE.prev = safeCall("上一页识别失败", () => findCandidate("prev", numericPager), null);
-    STATE.next = safeCall("下一页识别失败", () => findCandidate("next", numericPager), null);
-    const box = ensureToolbar();
-    if (!box) return;
-    box.querySelector(".prev").disabled = !STATE.prev;
-    box.querySelector(".next").disabled = !STATE.next;
-    schedulePosition();
+    if (STATE.updateInFlight) {
+      STATE.updateDirty = true;
+      return;
+    }
+    STATE.updateInFlight = true;
+    try {
+      const numericPager = safeCall("数字分页识别失败", detectNumericPager, null);
+      STATE.numericPager = numericPager;
+      observePagerRoot(numericPager?.root || null);
+      STATE.prev = safeCall("上一页识别失败", () => findCandidate("prev", numericPager), null);
+      STATE.next = safeCall("下一页识别失败", () => findCandidate("next", numericPager), null);
+      const box = ensureToolbar();
+      if (!box) return;
+      box.querySelector(".prev").disabled = !STATE.prev;
+      box.querySelector(".next").disabled = !STATE.next;
+      schedulePosition();
+    } finally {
+      STATE.updateInFlight = false;
+      if (STATE.updateDirty) {
+        STATE.updateDirty = false;
+        scheduleUpdate(0);
+      }
+    }
+  }
+
+  function cancelIdleUpdate() {
+    if (STATE.idleHandle == null) return;
+    if (STATE.idleUsesRequestCallback && typeof cancelIdleCallback === "function") {
+      cancelIdleCallback(STATE.idleHandle);
+    } else {
+      clearTimeout(STATE.idleHandle);
+    }
+    STATE.idleHandle = null;
+    STATE.idleUsesRequestCallback = false;
   }
 
   function runWhenIdle(fn, timeout = 800) {
-    if (typeof requestIdleCallback === "function") requestIdleCallback(fn, { timeout });
-    else setTimeout(fn, 1);
+    cancelIdleUpdate();
+    const run = () => {
+      STATE.idleHandle = null;
+      STATE.idleUsesRequestCallback = false;
+      fn();
+    };
+    if (typeof requestIdleCallback === "function") {
+      STATE.idleUsesRequestCallback = true;
+      STATE.idleHandle = requestIdleCallback(run, { timeout });
+    } else {
+      STATE.idleHandle = setTimeout(run, 1);
+    }
   }
 
   function scheduleUpdate(delay = 180) {
     clearTimeout(STATE.updateTimer);
-    if (document.hidden) return;
+    if (document.hidden) {
+      cancelIdleUpdate();
+      return;
+    }
+    // 已进入 idle 阶段的任务保留其 800ms 最迟执行保证；最新 DOM 会在执行时读取。
+    if (STATE.idleHandle != null) return;
     STATE.updateTimer = setTimeout(() => {
       STATE.updateTimer = null;
       runWhenIdle(() => { if (!document.hidden) void updateToolbar(); }, 800);
@@ -1805,7 +1888,7 @@
     const nodes = [...mutation.addedNodes, ...mutation.removedNodes];
     return nodes.some((node) => {
       if (!(node instanceof Element)) return false;
-      if (node.id === BASE_TOOLBAR_ID || node.id === VIDEO_FULLSCREEN_ID || node.id === SCRIPT_ID || node.id === STYLE_ID || node.tagName === "BODY" || node.tagName === "HEAD") return true;
+      if (node.id === BASE_TOOLBAR_ID || node.id === VIDEO_FULLSCREEN_ID || node.id === SCRIPT_ID || node.id === STYLE_ID || node.tagName === "HTML" || node.tagName === "BODY" || node.tagName === "HEAD") return true;
       if (node.querySelector?.(`#${BASE_TOOLBAR_ID}, #${VIDEO_FULLSCREEN_ID}`) || elementHasPaginationSignal(node)) return true;
       return [...(node.querySelectorAll?.('a, button, [role="button"], [rel~="next"], [rel~="prev"], [data-page], [data-page-number], [aria-current="page"]') || [])]
         .slice(0, 80).some(elementHasPaginationSignal);
@@ -1813,25 +1896,39 @@
   }
 
   function installSharedHistoryHook() {
-    window.addEventListener(SHARED_URL_CHANGE_EVENT, () => {
-      STATE.navigating = false;
-      scheduleEventUpdate();
-    });
-    if (window[SHARED_HISTORY_HOOK_KEY]?.eventName === SHARED_URL_CHANGE_EVENT) return;
-    try { window[SHARED_HISTORY_HOOK_KEY] = { version: 1, eventName: SHARED_URL_CHANGE_EVENT }; } catch (_) {}
+    const marker = window[SHARED_HISTORY_HOOK_KEY];
+    const dispatch = (kind) => {
+      const shared = window[SHARED_HISTORY_HOOK_KEY];
+      if (shared) shared.sequence = Number(shared.sequence || 0) + 1;
+      window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind, href: location.href } }));
+    };
+    const wrappersValid = ["pushState", "replaceState"].every((name) =>
+      typeof history[name] === "function" && history[name] === marker?.wrappers?.[name] && history[name].__urlChangeEvent === SHARED_URL_CHANGE_EVENT
+    );
+    if (marker?.eventName === SHARED_URL_CHANGE_EVENT && wrappersValid) return;
+    const wrappers = {};
     ["pushState", "replaceState"].forEach((name) => {
       const original = history[name];
-      if (typeof original !== "function" || original.__urlChangeEvent === SHARED_URL_CHANGE_EVENT) return;
+      if (typeof original !== "function") return;
       const wrapped = function () {
+        const sequence = Number(window[SHARED_HISTORY_HOOK_KEY]?.sequence || 0);
         const result = original.apply(this, arguments);
-        window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind: name, href: location.href } }));
+        if (Number(window[SHARED_HISTORY_HOOK_KEY]?.sequence || 0) === sequence) dispatch(name);
         return result;
       };
       try { Object.defineProperty(wrapped, "__urlChangeEvent", { value: SHARED_URL_CHANGE_EVENT }); } catch (_) {}
       try { history[name] = wrapped; } catch (_) {}
+      wrappers[name] = history[name] === wrapped ? wrapped : history[name];
     });
-    window.addEventListener("popstate", () => window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind: "popstate", href: location.href } })));
-    window.addEventListener("hashchange", () => window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind: "hashchange", href: location.href } })));
+    const handlers = marker?.handlers || {
+      popstate: () => dispatch("popstate"),
+      hashchange: () => dispatch("hashchange"),
+    };
+    if (!marker?.handlers) {
+      window.addEventListener("popstate", handlers.popstate);
+      window.addEventListener("hashchange", handlers.hashchange);
+    }
+    try { window[SHARED_HISTORY_HOOK_KEY] = { version: 2, eventName: SHARED_URL_CHANGE_EVENT, wrappers, handlers, sequence: Number(marker?.sequence || 0) }; } catch (_) {}
   }
 
   function installNodeSeekNavigationGuard() {
@@ -1850,28 +1947,14 @@
     }, true);
   }
 
-  function init() {
-    if (STATE.initialized) return;
-    const root = document.documentElement || document.body;
-    if (!root) {
-      setTimeout(init, 80);
-      return;
-    }
-    STATE.initialized = true;
-    ensureToolbar();
-    installSharedHistoryHook();
-    installNodeSeekNavigationGuard();
-    normalizeXVideosHashLater();
-    scheduleEventUpdate();
-
-    STATE.observer = new MutationObserver((mutations) => {
-      if (!document.getElementById(SCRIPT_ID) || !document.getElementById(STYLE_ID) || mutations.some(mutationTouchesRelevantUi)) {
-        ensureToolbar();
-        scheduleEventUpdate(false);
-      }
+  function installLifecycleListenersOnce() {
+    if (STATE.listenersInstalled) return;
+    STATE.listenersInstalled = true;
+    window.addEventListener(SHARED_URL_CHANGE_EVENT, () => {
+      STATE.navigating = false;
+      scheduleEventUpdate();
     });
-    STATE.observer.observe(root, { subtree: true, childList: true });
-
+    installNodeSeekNavigationGuard();
     window.addEventListener("floating-accessories-change", () => {
       ensureToolbar();
       schedulePosition();
@@ -1880,32 +1963,68 @@
     window.addEventListener("scroll", schedulePosition, { passive: true });
     window.visualViewport?.addEventListener("resize", schedulePosition);
     window.visualViewport?.addEventListener("scroll", schedulePosition);
-    window.addEventListener("pageshow", () => {
-      STATE.navigating = false;
-      ensureToolbar();
-      scheduleEventUpdate();
-    });
-    // Safari 从页面缓存恢复、切回标签页或站点完成异步挂载时，再做事件驱动自检；
-    // 不使用持续轮询，避免长期资源消耗。
-    window.addEventListener("focus", () => {
-      STATE.navigating = false;
-      ensureToolbar();
-      scheduleEventUpdate();
-    });
-    document.addEventListener("readystatechange", () => {
-      ensureToolbar();
-      scheduleEventUpdate();
-    });
+    window.addEventListener("pageshow", () => resume("pageshow"));
+    window.addEventListener("focus", () => resume("focus"));
+    document.addEventListener("readystatechange", () => resume("readystatechange"));
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) {
-        STATE.navigating = false;
-        ensureToolbar();
-        scheduleEventUpdate();
-      }
+      if (!document.hidden) resume("visible");
     });
-    log("已加载");
   }
 
+  function ensureDocumentObserver() {
+    if (STATE.observer) return;
+    STATE.observer = new MutationObserver((mutations) => {
+      const currentBox = document.getElementById(SCRIPT_ID);
+      const toolbarBroken = !currentBox || currentBox !== STATE.toolbar || currentBox.querySelector(".prev") !== STATE.prevButton || currentBox.querySelector(".next") !== STATE.nextButton;
+      if (toolbarBroken || document.getElementById(STYLE_ID) !== STATE.styleElement || !STATE.styleElement?.isConnected || mutations.some(mutationTouchesRelevantUi)) {
+        installSharedHistoryHook();
+        ensureToolbar();
+        scheduleEventUpdate(false);
+      }
+    });
+    STATE.observer.observe(document, { subtree: true, childList: true });
+  }
+
+  function resume() {
+    const root = document.documentElement || document.body;
+    if (!root) {
+      if (!STATE.retryTimer) {
+        STATE.retryTimer = setTimeout(() => {
+          STATE.retryTimer = null;
+          resume("root-ready");
+        }, 80);
+      }
+      return false;
+    }
+    STATE.navigating = false;
+    installSharedHistoryHook();
+    ensureToolbar();
+    ensureDocumentObserver();
+    installLifecycleListenersOnce();
+    normalizeXVideosHashLater();
+    scheduleEventUpdate();
+    STATE.initialized = true;
+    INSTANCE.phase = "running";
+    return true;
+  }
+
+  function init() {
+    try {
+      resume("init");
+    } catch (error) {
+      STATE.initialized = false;
+      INSTANCE.phase = "failed";
+      if (!STATE.retryTimer) {
+        STATE.retryTimer = setTimeout(() => {
+          STATE.retryTimer = null;
+          init();
+        }, 120);
+      }
+      log("初始化恢复中", error);
+    }
+  }
+
+  INSTANCE.resume = resume;
   init();
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => resume("dom-ready"), { once: true });
 })();

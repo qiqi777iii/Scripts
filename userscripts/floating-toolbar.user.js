@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.1
+// @version      1.6.2
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
@@ -17,6 +17,15 @@
 
 (() => {
   "use strict";
+
+  const INSTANCE_KEY = "__floatingToolbarInstanceV1__";
+  const previousInstance = document[INSTANCE_KEY];
+  if (previousInstance?.resume) {
+    previousInstance.resume("reinjected");
+    return;
+  }
+  const INSTANCE = { phase: "starting", resume: null };
+  document[INSTANCE_KEY] = INSTANCE;
 
   // 保留旧 DOM ID，确保“新标签页打开”和 TabsSaver 的组合定位继续兼容。
   const TOOLBAR_ID = "universal-pagination-floating-menu";
@@ -43,6 +52,12 @@
     suppressClickUntil: 0,
     savedPosition: null,
     observer: null,
+    toolbar: null,
+    styleElement: null,
+    newTabButton: null,
+    closeTabButton: null,
+    retryTimer: null,
+    listenersInstalled: false,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -171,7 +186,10 @@
   }
 
   function addStyles() {
-    if (document.getElementById(STYLE_ID)) return;
+    const existingStyle = document.getElementById(STYLE_ID);
+    if (existingStyle === state.styleElement && state.styleElement?.isConnected) return;
+    existingStyle?.remove?.();
+    if (state.styleElement && state.styleElement !== existingStyle) state.styleElement.remove?.();
     const style = document.createElement("style");
     style.id = STYLE_ID;
     style.textContent = `
@@ -254,6 +272,7 @@
         #${TOOLBAR_ID} .close-tab { color: #ff453a; }
       }
     `;
+    state.styleElement = style;
     document.documentElement.appendChild(style);
   }
 
@@ -358,10 +377,23 @@
     toolbar.addEventListener("pointercancel", finish);
   }
 
+  function toolbarHealthy(toolbar) {
+    return Boolean(
+      toolbar &&
+      toolbar === state.toolbar &&
+      toolbar.isConnected &&
+      toolbar.ownerDocument === document &&
+      toolbar.querySelector(".new-tab") === state.newTabButton &&
+      toolbar.querySelector(".close-tab") === state.closeTabButton
+    );
+  }
+
   function createToolbar() {
     addStyles();
     const existing = document.getElementById(TOOLBAR_ID);
-    if (existing) return existing;
+    if (toolbarHealthy(existing)) return existing;
+    existing?.remove();
+    if (state.toolbar && state.toolbar !== existing) state.toolbar.remove?.();
 
     const toolbar = document.createElement("div");
     toolbar.id = TOOLBAR_ID;
@@ -377,8 +409,12 @@
     `;
     isolateToolbar(toolbar);
     document.documentElement.appendChild(toolbar);
-    bindAction(toolbar.querySelector(".new-tab"), openStartPage);
-    bindAction(toolbar.querySelector(".close-tab"), closeCurrentTab);
+    const newTabButton = toolbar.querySelector(".new-tab");
+    const closeTabButton = toolbar.querySelector(".close-tab");
+    bindAction(newTabButton, openStartPage);
+    bindAction(closeTabButton, closeCurrentTab);
+    state.newTabButton = newTabButton;
+    state.closeTabButton = closeTabButton;
     setupDrag(toolbar);
 
     toolbar.addEventListener(GROUP_DRAG_EVENT, (event) => {
@@ -396,6 +432,7 @@
       positionBoundControl(toolbar);
     });
 
+    state.toolbar = toolbar;
     if (!applySavedPosition(toolbar)) applyDefaultPosition(toolbar);
     return toolbar;
   }
@@ -408,30 +445,15 @@
 
   function ensureToolbar() {
     const toolbar = createToolbar();
+    state.toolbar = toolbar;
     requestAnimationFrame(() => {
       if (!state.dragging) positionBoundControl(toolbar);
     });
   }
 
-  function init() {
-    if (state.initialized) return;
-    const root = document.documentElement || document.body;
-    if (!root) {
-      setTimeout(init, 80);
-      return;
-    }
-    state.initialized = true;
-    ensureToolbar();
-
-    state.observer = new MutationObserver((mutations) => {
-      const toolbarMissing = !document.getElementById(TOOLBAR_ID);
-      const styleMissing = !document.getElementById(STYLE_ID);
-      const boundControlChanged = mutations.some((mutation) => [...mutation.addedNodes, ...mutation.removedNodes].some((node) => node instanceof Element && ([BOUND_LINK_ID, BOOKMARK_TOOLBAR_ID, PAGE_NAVIGATION_ID].includes(node.id) || node.querySelector?.(`#${BOUND_LINK_ID}, #${BOOKMARK_TOOLBAR_ID}, #${PAGE_NAVIGATION_ID}`))));
-      if (toolbarMissing || styleMissing) ensureToolbar();
-      else if (boundControlChanged) stabilizePosition();
-    });
-    state.observer.observe(root, { subtree: true, childList: true });
-
+  function installListenersOnce() {
+    if (state.listenersInstalled) return;
+    state.listenersInstalled = true;
     let resizeTimer = null;
     const scheduleStabilize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
@@ -442,22 +464,63 @@
     window.addEventListener("scroll", scheduleStabilize, { passive: true });
     window.visualViewport?.addEventListener("resize", scheduleStabilize);
     window.visualViewport?.addEventListener("scroll", scheduleStabilize);
-    window.addEventListener("pageshow", () => {
-      state.navigating = false;
-      ensureToolbar();
-    });
+    window.addEventListener("pageshow", () => resume("pageshow"));
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) {
-        state.navigating = false;
-        ensureToolbar();
-      }
+      if (!document.hidden) resume("visible");
     });
-
-    log("已加载");
   }
 
+  function ensureObserver() {
+    if (state.observer) return;
+    state.observer = new MutationObserver((mutations) => {
+      const toolbarMissing = !toolbarHealthy(document.getElementById(TOOLBAR_ID));
+      const styleMissing = document.getElementById(STYLE_ID) !== state.styleElement || !state.styleElement?.isConnected;
+      const boundControlChanged = mutations.some((mutation) => [...mutation.addedNodes, ...mutation.removedNodes].some((node) => node instanceof Element && ([BOUND_LINK_ID, BOOKMARK_TOOLBAR_ID, PAGE_NAVIGATION_ID].includes(node.id) || node.querySelector?.(`#${BOUND_LINK_ID}, #${BOOKMARK_TOOLBAR_ID}, #${PAGE_NAVIGATION_ID}`))));
+      if (toolbarMissing || styleMissing) ensureToolbar();
+      else if (boundControlChanged) stabilizePosition();
+    });
+    state.observer.observe(document, { subtree: true, childList: true });
+  }
+
+  function resume() {
+    const root = document.documentElement || document.body;
+    if (!root) {
+      if (!state.retryTimer) {
+        state.retryTimer = setTimeout(() => {
+          state.retryTimer = null;
+          resume("root-ready");
+        }, 80);
+      }
+      return false;
+    }
+    ensureToolbar();
+    ensureObserver();
+    installListenersOnce();
+    state.navigating = false;
+    state.initialized = true;
+    INSTANCE.phase = "running";
+    return true;
+  }
+
+  function init() {
+    try {
+      resume("init");
+    } catch (error) {
+      INSTANCE.phase = "failed";
+      state.initialized = false;
+      if (!state.retryTimer) {
+        state.retryTimer = setTimeout(() => {
+          state.retryTimer = null;
+          init();
+        }, 120);
+      }
+      log("初始化恢复中", error);
+    }
+  }
+
+  INSTANCE.resume = resume;
   init();
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init, { once: true });
+    document.addEventListener("DOMContentLoaded", () => resume("dom-ready"), { once: true });
   }
 })();

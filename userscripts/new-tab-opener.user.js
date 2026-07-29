@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.4.10
+// @version      1.6.0
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -15,6 +15,15 @@
 
 (function () {
     'use strict';
+
+    const INSTANCE_KEY = '__newTabOpenerInstanceV1__';
+    const previousInstance = document[INSTANCE_KEY];
+    if (previousInstance?.resume) {
+        previousInstance.resume('reinjected');
+        return;
+    }
+    const INSTANCE = { phase: 'starting', resume: null };
+    document[INSTANCE_KEY] = INSTANCE;
 
     const KEY = '__tb_';
     const SHARED_ENABLED_KEY_PREFIX = 'newTabEnabledBySite:';
@@ -43,10 +52,11 @@
     let enabled = getVal('newTabEnabled', false);
     const sharedSiteKey = getSharedSiteKey(location.hostname);
     const sharedEnabledKey = SHARED_ENABLED_KEY_PREFIX + sharedSiteKey;
-    let toolbar, linkBtn, bodyObserver, toolbarEnsureTimer, neighborResizeObserver, neighborMutationObserver, observedNeighbor;
+    let toolbar, linkBtn, styleElement, bodyObserver, toolbarEnsureTimer, neighborResizeObserver, neighborMutationObserver, observedNeighbor;
     let listenersInstalled = false;
     let lastHref = location.href;
     let urlRefreshTimer = null;
+    let initRetryTimer = null;
     // 页面内临时位置；刷新页面后变量会重建并恢复默认位置。
     let savedPosition = null;
     let dragging = false;
@@ -501,7 +511,10 @@
     }
 
     function injectCSS() {
-        if (document.getElementById('__tb_style__')) return;
+        const existingStyle = document.getElementById('__tb_style__');
+        if (existingStyle === styleElement && styleElement?.isConnected) return;
+        existingStyle?.remove?.();
+        if (styleElement && styleElement !== existingStyle) styleElement.remove?.();
         const style = document.createElement('style');
         style.id = '__tb_style__';
         style.textContent = `
@@ -516,6 +529,7 @@
 #__tb_btn__:active{transform:none;opacity:.94;background:rgba(229,229,234,.96);}
 #__tb_btn__[data-enabled="true"]:active{background:rgba(229,229,234,.96);}
 @media (prefers-color-scheme: dark){#__tb_btn__{--combined-separator:rgba(255,255,255,.16);background:rgba(44,44,46,.82);color:rgba(255,255,255,.88);}#__tb_btn__[data-enabled="true"]{color:#64D2FF;}#__tb_btn__:active,#__tb_btn__[data-enabled="true"]:active{background:rgba(58,58,60,.92);}}`;
+        styleElement = style;
         const parent = document.head || document.documentElement || document.body;
         if (parent) parent.appendChild(style);
     }
@@ -671,6 +685,7 @@
 
         const oldToolbar = document.getElementById('__tb__');
         if (oldToolbar) oldToolbar.remove();
+        if (toolbar && toolbar !== oldToolbar) toolbar.remove?.();
 
         toolbar = document.createElement('div');
         toolbar.id = '__tb__';
@@ -764,7 +779,7 @@
         const existingToolbar = document.getElementById('__tb__');
         const existingBtn = document.getElementById('__tb_btn__');
         const existingStyle = document.getElementById('__tb_style__');
-        return Boolean(existingToolbar && existingBtn && existingStyle && existingToolbar.contains(existingBtn) && document.documentElement.contains(existingToolbar));
+        return Boolean(existingToolbar === toolbar && existingBtn === linkBtn && existingStyle === styleElement && styleElement?.isConnected && existingToolbar && existingBtn && existingToolbar.contains(existingBtn) && document.documentElement.contains(existingToolbar));
     }
 
     function ensureToolbar() {
@@ -772,6 +787,7 @@
         const btn = document.getElementById('__tb_btn__');
         const body = document.body;
         if (isToolbarHealthy() && existing && btn && toolbar === existing && linkBtn === btn) {
+            hookHistoryForUrlChange();
             // document-start 时可能先挂到 <html>；body 出现后立刻挪进去，避免部分站点重写根节点导致按钮丢失。
             if (body && existing.parentNode !== body) body.appendChild(existing);
             return true;
@@ -798,14 +814,13 @@
     }
 
     function startBodyGuard() {
-        const parent = document.documentElement || document.body;
-        if (!parent || bodyObserver) return;
+        if (bodyObserver) return;
         bodyObserver = new MutationObserver(function (mutations) {
             if (!mutations.some(mutationTouchesFloatingUi)) return;
             // 相关节点变化才调度一次轻量健康检查；不扫描普通页面内容。
             scheduleEnsureToolbar(30);
         });
-        bodyObserver.observe(parent, { childList: true, subtree: true });
+        bodyObserver.observe(document, { childList: true, subtree: true });
     }
 
     let positionSyncScheduled = false;
@@ -832,6 +847,7 @@
         window.addEventListener('scroll', stabilizePosition, { passive: true });
         window.visualViewport?.addEventListener('resize', stabilizePosition);
         window.visualViewport?.addEventListener('scroll', stabilizePosition);
+        window.addEventListener(SHARED_URL_CHANGE_EVENT, scheduleUrlRefresh);
         hookHistoryForUrlChange();
         window.addEventListener('pageshow', init);
         document.addEventListener('visibilitychange', function () { if (!document.hidden) init(); });
@@ -849,34 +865,60 @@
     }
 
     function dispatchSharedUrlChange(kind) {
+        const shared = window[SHARED_HISTORY_HOOK_KEY];
+        if (shared) shared.sequence = Number(shared.sequence || 0) + 1;
         window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind, href: location.href } }));
     }
 
     function hookHistoryForUrlChange() {
-        window.addEventListener(SHARED_URL_CHANGE_EVENT, scheduleUrlRefresh);
-        if (window[SHARED_HISTORY_HOOK_KEY]?.eventName === SHARED_URL_CHANGE_EVENT) return;
-        try { window[SHARED_HISTORY_HOOK_KEY] = { version: 1, eventName: SHARED_URL_CHANGE_EVENT }; } catch (_) {}
+        const shared = window[SHARED_HISTORY_HOOK_KEY];
+        const wrappersValid = ['pushState', 'replaceState'].every(function (name) {
+            return typeof history[name] === 'function' && history[name] === shared?.wrappers?.[name] && history[name].__urlChangeEvent === SHARED_URL_CHANGE_EVENT;
+        });
+        if (shared?.eventName === SHARED_URL_CHANGE_EVENT && wrappersValid) return;
+        const wrappers = {};
         ['pushState', 'replaceState'].forEach(function (name) {
             const original = history[name];
-            if (typeof original !== 'function' || original.__urlChangeEvent === SHARED_URL_CHANGE_EVENT) return;
+            if (typeof original !== 'function') return;
             const wrapped = function () {
+                const sequence = Number(window[SHARED_HISTORY_HOOK_KEY]?.sequence || 0);
                 const result = original.apply(this, arguments);
-                dispatchSharedUrlChange(name);
+                if (Number(window[SHARED_HISTORY_HOOK_KEY]?.sequence || 0) === sequence) dispatchSharedUrlChange(name);
                 return result;
             };
             try { Object.defineProperty(wrapped, '__urlChangeEvent', { value: SHARED_URL_CHANGE_EVENT }); } catch (_) {}
             try { history[name] = wrapped; } catch (_) {}
+            wrappers[name] = history[name] === wrapped ? wrapped : history[name];
         });
-        window.addEventListener('popstate', function () { dispatchSharedUrlChange('popstate'); });
-        window.addEventListener('hashchange', function () { dispatchSharedUrlChange('hashchange'); });
+        const handlers = shared?.handlers || {
+            popstate: function () { dispatchSharedUrlChange('popstate'); },
+            hashchange: function () { dispatchSharedUrlChange('hashchange'); }
+        };
+        if (!shared?.handlers) {
+            window.addEventListener('popstate', handlers.popstate);
+            window.addEventListener('hashchange', handlers.hashchange);
+        }
+        try { window[SHARED_HISTORY_HOOK_KEY] = { version: 2, eventName: SHARED_URL_CHANGE_EVENT, wrappers, handlers, sequence: Number(shared?.sequence || 0) }; } catch (_) {}
     }
 
     function init() {
-        if (!ensureToolbar()) return;
+        if (!document.documentElement && !document.body) {
+            if (!initRetryTimer) {
+                initRetryTimer = setTimeout(function () {
+                    initRetryTimer = null;
+                    init();
+                }, 30);
+            }
+            return false;
+        }
+        hookHistoryForUrlChange();
+        if (!ensureToolbar()) return false;
         startBodyGuard();
         installPositionListenersOnce();
-        // 悬浮工具栏稍晚创建时，由 body guard / pageshow / focus 事件驱动同步位置。
+        // 悬浮工具栏稍晚创建时，由 document guard / pageshow / focus 事件驱动同步位置。
         scheduleVisualBurst();
+        INSTANCE.phase = 'running';
+        return true;
     }
 
     function bootstrap() {
@@ -888,12 +930,23 @@
         window.addEventListener('click', handleCuratedVideoLinkOpenEarly, true);
         window.addEventListener('click', handleLinkOpen);
 
-        // document-end 先创建基础按钮；GM 状态读取完成后只刷新开关外观，避免存储延迟阻塞 UI。
+        // document-start 先创建基础按钮；GM 状态读取完成后只刷新开关外观，避免存储延迟阻塞 UI。
         bootstrap();
         await loadEnabledState();
         updateBtn();
         installEnabledStateListener();
     }
 
-    void start();
+    INSTANCE.resume = function () {
+        try {
+            init();
+        } catch (_) {
+            INSTANCE.phase = 'failed';
+            scheduleEnsureToolbar(120);
+        }
+    };
+    void start().catch(function () {
+        INSTANCE.phase = 'failed';
+        scheduleEnsureToolbar(120);
+    });
 })();
