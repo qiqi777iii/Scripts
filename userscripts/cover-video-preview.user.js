@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频封面预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.3.1
+// @version      1.3.2
 // @description  首次点按视频封面播放静音预览，再次点按进入详情；支持通用网页检测，并保留已适配站点的专用逻辑。
 // @match        *://*/*
 // @grant        none
@@ -39,6 +39,7 @@
     let lastScrollY = window.scrollY;
     let nativePreviewBlockUntil = 0;
     let nativePreviewBlockUrl = null;
+    let nativeTouchCard = null;
 
     function safeClosest(target, selector) {
         return target instanceof Element ? target.closest(selector) : null;
@@ -144,19 +145,30 @@
         }
     }
 
+    function isEpornerDetailUrl(href) {
+        if (!IS_EPORNER || !href) return false;
+        try {
+            const url = new URL(href, document.baseURI);
+            return url.origin === location.origin && /^\/(?:video-[^/]+|hd-porn\/[^/]+)(?:\/|$)/i.test(url.pathname);
+        } catch (_) {
+            return false;
+        }
+    }
+
     function cardUrl(card) {
         if (!(card instanceof Element)) return null;
         let link = null;
         if (IS_XVIDEOS && card.matches('.thumb-block:not(.thumb-ad)')) {
             link = card.querySelector('.thumb-inside .thumb img[data-pvv]')?.closest('a[href]');
         } else if (IS_EPORNER && card.matches('.mb')) {
-            link = card.querySelector('.mbimg a[href^="/video-"], .mbcontent a[href^="/video-"]');
+            link = card.querySelector('.mbcontent > a[href], .mbimg a[href], .mbtit > a[href]');
         } else if (IS_PORNHUB && card.matches('li[data-video-vkey], li[data-video-id]')) {
             link = card.querySelector('a.imageLink[href*="view_video.php?viewkey="]');
         } else {
             link = card.matches('a[href]') ? card : card.querySelector('img')?.closest('a[href]') || card.querySelector('a[href]');
         }
         const href = normalizeMediaUrl(link?.getAttribute('href'));
+        if (IS_EPORNER && card.matches('.mb') && !isEpornerDetailUrl(href)) return null;
         return IS_XVIDEOS && card.matches('.thumb-block:not(.thumb-ad)') && !isXVideosDetailUrl(href) ? null : href;
     }
 
@@ -502,6 +514,22 @@
         video.remove();
     }
 
+    function stopEpornerNativePreview() {
+        if (!IS_EPORNER) return;
+        try { window.EP?.thumbs?.preview?.stop?.(); } catch (_) {}
+        document.querySelectorAll('#previddiv.previdthumb').forEach(function (wrapper) {
+            wrapper.querySelectorAll('video[id^="previd-"]').forEach(function (video) {
+                try { video.pause(); } catch (_) {}
+                try {
+                    video.removeAttribute('src');
+                    video.querySelectorAll('source').forEach(function (source) { source.removeAttribute('src'); });
+                    video.load();
+                } catch (_) {}
+            });
+            wrapper.remove();
+        });
+    }
+
     function stopActive() {
         const current = active;
         active = null;
@@ -608,6 +636,7 @@
     }
 
     function startPreview(card) {
+        stopEpornerNativePreview();
         const nativeVideo = card.querySelector('video.preview[data-src], video.preview[src]');
         if (nativeVideo && sourceFromMedia(nativeVideo)) return mountNativePreview(card, nativeVideo);
         const url = resolvePreviewUrl(card);
@@ -662,7 +691,7 @@
         const fromTouchPointer = event.pointerType === 'touch';
         if (!fromTouchPointer && Date.now() > nativePreviewBlockUntil) return;
         const card = findCard(event.target);
-        if (!card || !isCoverTarget(card, event.target)) return;
+        if (!card || (!IS_EPORNER && !isCoverTarget(card, event.target))) return;
         const href = cardUrl(card);
         if (!fromTouchPointer && nativePreviewBlockUrl && href !== nativePreviewBlockUrl) return;
         if (fromTouchPointer) {
@@ -676,15 +705,36 @@
         window.addEventListener(type, blockConflictingNativePreview, true);
     });
 
+    document.addEventListener('play', function (event) {
+        const video = event.target;
+        if (!IS_EPORNER || !(video instanceof HTMLVideoElement) || !video.matches('#previddiv.previdthumb video[id^="previd-"]')) return;
+        if (active?.video === video) return;
+        stopEpornerNativePreview();
+    }, true);
+
+    document.addEventListener('playing', function (event) {
+        const video = event.target;
+        if (!IS_EPORNER || !(video instanceof HTMLVideoElement) || !video.matches('#previddiv.previdthumb video[id^="previd-"]')) return;
+        if (active?.video === video) return;
+        stopEpornerNativePreview();
+    }, true);
+
     window.addEventListener('touchstart', function (event) {
         compatClickGuard = null;
+        nativeTouchCard = null;
         if (event.isTrusted !== true || event.touches.length !== 1) {
             gesture = null;
             return;
         }
+        const epornerCard = IS_EPORNER ? safeClosest(event.target, '.mb[data-id][data-vp]') : null;
+        if (epornerCard) {
+            nativeTouchCard = epornerCard;
+            stopEpornerNativePreview();
+        }
         const card = findCard(event.target);
         if (!card || !isCoverTarget(card, event.target)) {
             gesture = null;
+            if (epornerCard) event.stopImmediatePropagation();
             return;
         }
         const point = event.touches[0];
@@ -706,6 +756,10 @@
     }, { capture: true, passive: true });
 
     window.addEventListener('touchmove', function (event) {
+        if (IS_EPORNER && nativeTouchCard) {
+            stopEpornerNativePreview();
+            event.stopImmediatePropagation();
+        }
         if (!gesture) return;
         if (BLOCK_NATIVE_SITE_PREVIEW) event.stopImmediatePropagation();
         if (event.touches.length !== 1 || gesture.moved) return;
@@ -720,7 +774,13 @@
 
     window.addEventListener('touchend', function (event) {
         const origin = gesture;
+        const nativeOrigin = nativeTouchCard;
         gesture = null;
+        nativeTouchCard = null;
+        if (IS_EPORNER && nativeOrigin) {
+            stopEpornerNativePreview();
+            event.stopImmediatePropagation();
+        }
         if (!origin) return;
         const endCard = findCard(event.target);
         const endHref = cardUrl(endCard);
@@ -731,9 +791,11 @@
         if (BLOCK_NATIVE_SITE_PREVIEW) event.stopImmediatePropagation();
 
         const elapsed = Date.now() - origin.startedAt;
+        const endPoint = event.changedTouches?.[0] || null;
+        const endDistance = endPoint ? Math.hypot(endPoint.clientX - origin.x, endPoint.clientY - origin.y) : Infinity;
         const pageMoved = Math.abs(window.scrollY - origin.scrollY) >= SWIPE_CANCEL_DISTANCE;
         const pageStillSettling = Date.now() - lastScrollAt < SCROLL_SETTLE_MS;
-        const validTap = !origin.moved && origin.settled && !pageMoved && !pageStillSettling &&
+        const validTap = !origin.moved && endDistance < SWIPE_CANCEL_DISTANCE && origin.settled && !pageMoved && !pageStillSettling &&
             elapsed < TAP_MAX_MS && endIsCover && sameContext(origin.card, origin.href, endCard, endHref);
         if (!validTap) return;
         event.preventDefault();
@@ -741,9 +803,14 @@
         performCoverAction(origin.card, origin.href);
     }, { capture: true, passive: false });
 
-    window.addEventListener('touchcancel', function () {
+    window.addEventListener('touchcancel', function (event) {
         if (gesture?.card) guardCompatibilityClick(gesture.card);
         gesture = null;
+        if (IS_EPORNER && nativeTouchCard) {
+            stopEpornerNativePreview();
+            event.stopImmediatePropagation();
+        }
+        nativeTouchCard = null;
         stopActive();
     }, { capture: true, passive: true });
 
