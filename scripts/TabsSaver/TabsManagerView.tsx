@@ -127,7 +127,7 @@ const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
 const SHOW_FAVORITES_KEY = "tab.showFavorites"
-const APP_VERSION = "2.2.10"
+const APP_VERSION = "2.3.0"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = {
   version: string
@@ -136,6 +136,14 @@ type ChangelogEntry = {
   items: string[]
 }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "2.3.0",
+    date: "2026-07-29",
+    summary: "修复首页分组无法点击",
+    items: [
+      "为首页默认 UI 补充独立导航容器，分组和收藏入口恢复正常颜色与点击跳转。",
+    ],
+  },
   {
     version: "2.2.10",
     date: "2026-07-28",
