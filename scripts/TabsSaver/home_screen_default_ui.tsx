@@ -1,5 +1,10 @@
+import { NavigationStack } from "scripting"
 import TabsManagerView from "./TabsManagerView"
 
 export default function HomeScreenDefaultUI() {
-  return <TabsManagerView homeScreen />
+  return (
+    <NavigationStack>
+      <TabsManagerView homeScreen />
+    </NavigationStack>
+  )
 }
