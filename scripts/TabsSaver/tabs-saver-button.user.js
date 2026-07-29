@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.2.9
+// @version 2.2.10
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -12,11 +12,21 @@
 // ==/UserScript==
 
 (() => {
+  const INSTANCE_KEY = "__tabsSaverButtonInstanceV1__"
+  const previousInstance = document[INSTANCE_KEY]
+  if (previousInstance?.resume) {
+    previousInstance.resume("reinjected")
+    return
+  }
+  const INSTANCE = { phase: "starting", resume: null }
+  document[INSTANCE_KEY] = INSTANCE
   const WRAP_ID = "tab-save-toolbar"
   const BUTTON_ID = "tab-save-button"
   const PICKER_ID = "tab-save-picker"
   const TOAST_ID = "tab-save-toast"
   const DIALOG_ID = "tab-save-dialog"
+  const SHARED_URL_CHANGE_EVENT = "scripts:urlchange"
+  const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__"
   const STORE_FILE_NAME = "tabs-saver-store.json"
   const DEFAULT_GROUP_NAME = "默认"
   const BTN_SIZE = 35
@@ -44,6 +54,7 @@
 
   let wrap = null
   let button = null
+  let styleElement = null
   let savedPosition = null
   let dragging = false
   let moved = false
@@ -59,7 +70,11 @@
   let neighborMutationObserver = null
   let observedNeighbor = null
   let healthWatchdogTimer = null
+  let bootRetryTimer = null
+  let bootRetryCount = 0
+  let startupPositionTimers = []
   const HEALTH_WATCHDOG_INTERVAL = 60000
+  const BOOT_RETRY_DELAYS = [30, 120, 500, 1500, 3000, 6000]
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
@@ -380,12 +395,13 @@
   }
 
   async function refreshSavedVisual() {
+    const href = location.href
     try {
       const { file } = storePath()
       const store = await loadStore(file)
-      setSavedVisual(hasBookmark(store, location.href))
+      if (location.href === href) setSavedVisual(hasBookmark(store, href))
     } catch (_) {
-      setSavedVisual(false)
+      if (location.href === href) setSavedVisual(false)
     }
   }
 
@@ -395,7 +411,10 @@
   }
 
   function injectCSS() {
-    if (document.getElementById("tab-save-style")) return
+    const existingStyle = document.getElementById("tab-save-style")
+    if (existingStyle === styleElement && styleElement?.isConnected) return
+    existingStyle?.remove?.()
+    if (styleElement && styleElement !== existingStyle) styleElement.remove?.()
     const style = document.createElement("style")
     style.id = "tab-save-style"
     style.textContent = `
@@ -441,6 +460,7 @@
 #${DIALOG_ID} button:disabled{opacity:.55;}
 @media (prefers-color-scheme:dark){#${BUTTON_ID}{--combined-separator:rgba(255,255,255,.16);background:rgba(44,44,46,.82);color:rgba(255,255,255,.94);}#${BUTTON_ID}[data-saved="true"]{color:#30D158;}#${DIALOG_ID}{color:#fff;}#${DIALOG_ID} .qts-dialog-card{background:rgba(28,28,30,.96);}#${DIALOG_ID} .qts-dialog-cancel,#${DIALOG_ID} .qts-dialog-group,#${DIALOG_ID} .qts-dialog-new-group{background:#3A3A3C;color:#fff;}#${DIALOG_ID} input[type="radio"]:checked{background-color:#1C1C1E!important;}}
 `
+    styleElement = style
     ;(document.head || document.documentElement).appendChild(style)
   }
 
@@ -519,17 +539,21 @@
     observeNeighbor(neighbor)
     if (neighbor) {
       const rect = neighbor.getBoundingClientRect()
-      if (rect.width > 0 && rect.height > 0) {
+      const neighborVisible = rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < viewport.width && rect.bottom > 0 && rect.top < viewport.height
+      if (neighborVisible) {
         const pos = clampPos(rect.left - INITIAL_GAP - BTN_SIZE + CONNECT_OVERLAP, rect.top)
         wrap.style.left = pos.left + "px"
         wrap.style.right = "auto"
-        // 新标签页工具栏通常用 bottom 锚定。不能只看 inline style：
-        // Safari/其他悬浮脚本可能通过 CSS 或稍后的布局阶段设置 bottom，
-        // 此时读取 rect.top 会把收藏按钮固定在旧的视觉视口坐标，点击新标签页按钮后就会上下错位。
+        // bottom 锚点只有在当前视口内有效时才沿用；否则使用已限制在视口内的 top。
         if (hasBottomAnchor(neighbor)) {
-          const computed = getComputedStyle(neighbor)
-          wrap.style.bottom = computed.bottom
-          wrap.style.top = "auto"
+          const computedBottom = parseFloat(getComputedStyle(neighbor).bottom)
+          if (Number.isFinite(computedBottom) && computedBottom >= 0 && computedBottom <= Math.max(0, viewport.height - BTN_SIZE)) {
+            wrap.style.bottom = computedBottom + "px"
+            wrap.style.top = "auto"
+          } else {
+            wrap.style.top = pos.top + "px"
+            wrap.style.bottom = "auto"
+          }
         } else {
           wrap.style.top = pos.top + "px"
           wrap.style.bottom = "auto"
@@ -547,14 +571,16 @@
   function schedulePositionStabilize() {
     if (positionSyncScheduled) return
     positionSyncScheduled = true
-    requestAnimationFrame(() => {
+    const run = () => {
       positionSyncScheduled = false
       if (!wrap || dragging) return
       if (savedPosition) applySavedPosition()
       else applyDefaultPosition()
       refreshConnectedVisual()
       wrap.style.transform = "translate3d(0,0,0)"
-    })
+    }
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run)
+    else setTimeout(run, 16)
   }
 
   function onPointerDown(e) {
@@ -606,8 +632,8 @@
   }
 
   function setSavedVisual(saved) {
-    const btn = document.getElementById(BUTTON_ID)
-    if (!btn) return
+    const btn = button
+    if (!btn?.isConnected || btn.parentElement !== wrap) return
     btn.innerHTML = bookmarkSVG(saved)
     btn.dataset.saved = saved ? "true" : "false"
     btn.title = saved ? "移除收藏" : "收藏到 Tab"
@@ -630,6 +656,42 @@
     return String(text).replace(/[&<>"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]))
   }
 
+  function installSharedHistoryHook() {
+    const dispatch = kind => {
+      const shared = window[SHARED_HISTORY_HOOK_KEY]
+      if (shared) shared.sequence = Number(shared.sequence || 0) + 1
+      window.dispatchEvent(new CustomEvent(SHARED_URL_CHANGE_EVENT, { detail: { kind, href: location.href } }))
+    }
+    const marker = window[SHARED_HISTORY_HOOK_KEY]
+    const wrappersValid = ["pushState", "replaceState"].every(name =>
+      typeof history[name] === "function" && history[name] === marker?.wrappers?.[name] && history[name].__urlChangeEvent === SHARED_URL_CHANGE_EVENT
+    )
+    if (marker?.eventName === SHARED_URL_CHANGE_EVENT && wrappersValid) return
+    const wrappers = {}
+    ;["pushState", "replaceState"].forEach(name => {
+      const original = history[name]
+      if (typeof original !== "function") return
+      const wrapped = function () {
+        const sequence = Number(window[SHARED_HISTORY_HOOK_KEY]?.sequence || 0)
+        const result = original.apply(this, arguments)
+        if (Number(window[SHARED_HISTORY_HOOK_KEY]?.sequence || 0) === sequence) dispatch(name)
+        return result
+      }
+      try { Object.defineProperty(wrapped, "__urlChangeEvent", { value: SHARED_URL_CHANGE_EVENT }) } catch (_) {}
+      try { history[name] = wrapped } catch (_) {}
+      wrappers[name] = history[name] === wrapped ? wrapped : history[name]
+    })
+    const handlers = marker?.handlers || {
+      popstate: () => dispatch("popstate"),
+      hashchange: () => dispatch("hashchange"),
+    }
+    if (!marker?.handlers) {
+      window.addEventListener("popstate", handlers.popstate)
+      window.addEventListener("hashchange", handlers.hashchange)
+    }
+    try { window[SHARED_HISTORY_HOOK_KEY] = { version: 2, eventName: SHARED_URL_CHANGE_EVENT, wrappers, handlers, sequence: Number(marker?.sequence || 0) } } catch (_) {}
+  }
+
   function installPositionListeners() {
     if (globalListenersInstalled) return
     globalListenersInstalled = true
@@ -637,6 +699,7 @@
     window.addEventListener("scroll", schedulePositionStabilize, { passive: true })
     window.visualViewport?.addEventListener("resize", schedulePositionStabilize)
     window.visualViewport?.addEventListener("scroll", schedulePositionStabilize)
+    window.addEventListener(SHARED_URL_CHANGE_EVENT, refreshSavedVisual)
     window.addEventListener("pageshow", () => { refreshSavedVisual(); scheduleHealthCheck(); startHealthWatchdog() })
     window.addEventListener("pagehide", stopHealthWatchdog)
     window.addEventListener("focus", refreshSavedVisual)
@@ -655,31 +718,35 @@
   function ensureButtonHealthy() {
     injectCSS()
     startDomGuard()
+    installSharedHistoryHook()
     const currentWrap = document.getElementById(WRAP_ID)
     const currentButton = document.getElementById(BUTTON_ID)
-    if (!currentWrap || !currentButton || currentButton.parentElement !== currentWrap || !currentWrap.isConnected) {
+    const owned = currentWrap === wrap && currentButton === button
+    if (!owned || !currentWrap || !currentButton || currentButton.parentElement !== currentWrap || !currentWrap.isConnected) {
       currentWrap?.remove?.()
+      if (wrap && wrap !== currentWrap) wrap.remove?.()
       wrap = null
       button = null
-      createButton()
+      resumeButtonRuntime(true)
       return
     }
     wrap = currentWrap
     button = currentButton
     const parent = document.body || document.documentElement
-    if (parent && currentWrap.parentNode !== parent) {
-      parent.appendChild(currentWrap)
-      schedulePositionStabilize()
-    }
+    if (parent && currentWrap.parentNode !== parent) parent.appendChild(currentWrap)
+    // 节点健康不代表位置健康：相邻按钮可能在稍后才出现，必须重新收敛组合顺序。
+    schedulePositionStabilize()
   }
 
   function scheduleHealthCheck() {
     if (healthCheckQueued) return
     healthCheckQueued = true
-    requestAnimationFrame(() => {
+    const run = () => {
       healthCheckQueued = false
       ensureButtonHealthy()
-    })
+    }
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run)
+    else setTimeout(run, 16)
   }
 
   function watchHead(head) {
@@ -700,11 +767,11 @@
   }
 
   function mutationTouchesFloatingUi(mutation) {
-    const selector = `#${WRAP_ID}, #${BUTTON_ID}, #${NEW_TAB_TOOLBAR_ID}, #${FLOATING_TOOLBAR_ID}`
+    const selector = `#${WRAP_ID}, #${BUTTON_ID}, #tab-save-style, #${NEW_TAB_TOOLBAR_ID}, #${FLOATING_TOOLBAR_ID}`
     const nodes = [...mutation.addedNodes, ...mutation.removedNodes]
     return nodes.some(node => {
       if (!(node instanceof Element)) return false
-      if (node.tagName === "HEAD" || node.tagName === "BODY") return true
+      if (node.tagName === "HTML" || node.tagName === "HEAD" || node.tagName === "BODY") return true
       return node.matches?.(selector) || Boolean(node.querySelector?.(selector))
     })
   }
@@ -720,8 +787,9 @@
       if (!mutations.some(mutationTouchesFloatingUi)) return
       watchHead(document.head)
       scheduleHealthCheck()
+      schedulePositionStabilize()
     })
-    rootObserver.observe(root, { childList: true, subtree: true })
+    rootObserver.observe(document, { childList: true, subtree: true })
   }
 
   function stopHealthWatchdog() {
@@ -732,18 +800,21 @@
 
   function startHealthWatchdog() {
     if (healthWatchdogTimer || document.hidden) return
-    const tick = () => {
+    healthWatchdogTimer = setTimeout(() => {
       healthWatchdogTimer = null
-      if (document.hidden) return
-      scheduleHealthCheck()
-      healthWatchdogTimer = setTimeout(tick, HEALTH_WATCHDOG_INTERVAL)
-    }
-    healthWatchdogTimer = setTimeout(tick, HEALTH_WATCHDOG_INTERVAL)
+      if (!document.hidden) scheduleHealthCheck()
+    }, HEALTH_WATCHDOG_INTERVAL)
   }
 
   function createButton() {
-    if (document.getElementById(WRAP_ID)) return
-    injectCSS()
+    const existingWrap = document.getElementById(WRAP_ID)
+    const existingButton = document.getElementById(BUTTON_ID)
+    const healthy = existingWrap === wrap && existingButton === button && existingButton?.parentElement === existingWrap && existingWrap.isConnected
+    if (healthy) return false
+    existingWrap?.remove?.()
+    if (wrap && wrap !== existingWrap) wrap.remove?.()
+    wrap = null
+    button = null
     wrap = document.createElement("div")
     wrap.id = WRAP_ID
     button = document.createElement("button")
@@ -758,24 +829,71 @@
     button.addEventListener("pointercancel", onPointerUp)
     wrap.appendChild(button)
     document.documentElement.appendChild(wrap)
-    applyDefaultPosition()
-    refreshSavedVisual()
+    return true
+  }
+
+  function resumeButtonRuntime(refreshState = false) {
+    injectCSS()
+    const created = createButton()
+    // UI 先独立出现；存储状态读取异步执行，不参与按钮创建成败。
+    if (created || refreshState) void refreshSavedVisual()
     installPositionListeners()
     startDomGuard()
     startHealthWatchdog()
     schedulePositionStabilize()
+    return Boolean(wrap?.isConnected && button?.isConnected)
+  }
+
+  function scheduleBootRetry() {
+    if (bootRetryTimer || bootRetryCount >= BOOT_RETRY_DELAYS.length) return
+    const delay = BOOT_RETRY_DELAYS[bootRetryCount++]
+    bootRetryTimer = setTimeout(() => {
+      bootRetryTimer = null
+      boot("retry")
+    }, delay)
+  }
+
+  function scheduleStartupPositionConvergence() {
+    startupPositionTimers.forEach(clearTimeout)
+    startupPositionTimers = [120, 500, 1500, 3000, 6000].map(delay => setTimeout(schedulePositionStabilize, delay))
   }
 
   function boot() {
-    createButton()
-    startHealthWatchdog()
-    scheduleHealthCheck()
-    ;[120, 500, 1500, 3000, 6000].forEach(delay => setTimeout(scheduleHealthCheck, delay))
+    if (!document.documentElement) {
+      scheduleBootRetry()
+      return false
+    }
+    try {
+      installSharedHistoryHook()
+      if (!resumeButtonRuntime(true)) throw new Error("收藏按钮尚未连接")
+      scheduleHealthCheck()
+      scheduleStartupPositionConvergence()
+      bootRetryCount = 0
+      if (bootRetryTimer) {
+        clearTimeout(bootRetryTimer)
+        bootRetryTimer = null
+      }
+      INSTANCE.phase = "running"
+      return true
+    } catch (_) {
+      INSTANCE.phase = "failed"
+      scheduleBootRetry()
+      return false
+    }
   }
 
-  boot()
+  INSTANCE.resume = () => {
+    bootRetryCount = 0
+    return boot("resume")
+  }
+  boot("initial")
   if (document.readyState === "loading") {
     // 按钮不依赖 body，立即创建；DOMContentLoaded 只作为额外健康检查点。
-    document.addEventListener("DOMContentLoaded", scheduleHealthCheck, { once: true })
+    document.addEventListener("DOMContentLoaded", () => {
+      bootRetryCount = 0
+      boot("dom-ready")
+      scheduleHealthCheck()
+      schedulePositionStabilize()
+    }, { once: true })
   }
 })()
