@@ -26,7 +26,7 @@
   "iconImage" : null,
   "entry" : "index.tsx",
   "icon" : "bookmark.fill",
-  "version" : "2.3.0",
+  "version" : "2.3.2",
   "localizedNames" : {
     "zh" : "标签页收藏",
     "en" : "Tabs Saver"

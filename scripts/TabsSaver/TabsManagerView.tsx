@@ -61,13 +61,6 @@ import {
   deleteCloudBackup,
   getSyncMeta,
   formatSyncStatus,
-  maybeAutoSync,
-  getAutoSyncInterval,
-  setAutoSyncInterval,
-  getAutoSyncProvider,
-  setAutoSyncProvider,
-  autoSyncLabel,
-  AUTO_SYNC_OPTIONS,
   getWebDAVConfig,
   saveWebDAVConfig,
   clearWebDAVConfig,
@@ -76,7 +69,6 @@ import {
   testWebDAVConnection,
   getRestoreUndoInfo,
   undoLastRestore,
-  type AutoSyncProvider,
   type SyncMeta,
   type PushResult,
   type CloudBackup,
@@ -127,7 +119,7 @@ const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
 const SHOW_FAVORITES_KEY = "tab.showFavorites"
-const APP_VERSION = "2.3.0"
+const APP_VERSION = "2.3.2"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = {
   version: string
@@ -136,6 +128,14 @@ type ChangelogEntry = {
   items: string[]
 }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "2.3.2",
+    date: "2026-08-01",
+    summary: "修复批量删除即时刷新",
+    items: [
+      "多选删除后会立即重建分组和顶部收藏的动态列表，不再等待页面重新出现才刷新。",
+    ],
+  },
   {
     version: "2.3.0",
     date: "2026-07-29",
@@ -150,7 +150,7 @@ const CHANGELOG_ENTRIES: ChangelogEntry[] = [
     summary: "支持首页默认标签页",
     items: [
       "新增首页默认脚本 UI，可将原标签页收藏界面直接显示在 Scripting 首页标签页。",
-      "首页复用原管理界面，但不会安装浏览器脚本、启动自动同步或显示启动弹窗。",
+      "首页复用原管理界面，但不会安装浏览器脚本或显示启动弹窗。",
     ],
   },
   {
@@ -400,12 +400,6 @@ export default function TabsManagerView({
   const [sortList, setSortList] = useState<Group[]>([])
   const [syncMeta, setSyncMeta] = useState<SyncMeta>(() => getSyncMeta())
   const [syncing, setSyncing] = useState(false)
-  const [autoInterval, setAutoInterval] = useState<number>(() =>
-    getAutoSyncInterval(),
-  )
-  const [autoProvider, setAutoProvider] = useState<AutoSyncProvider | null>(() =>
-    getAutoSyncProvider(),
-  )
 
   async function reload() {
     const s = await loadStore()
@@ -434,13 +428,6 @@ export default function TabsManagerView({
 
       const installedBrowserVersion = await installBundledBrowserScript()
       await reload()
-      // Foreground auto-sync: upload once if the configured interval elapsed.
-      if (getAutoSyncInterval() !== 0 && webDAVConfigured()) {
-        setSyncing(true)
-        await maybeAutoSync()
-        setSyncing(false)
-        setSyncMeta(getSyncMeta())
-      }
       if (installedBrowserVersion) {
         await Dialog.alert({
           title: "Safari 收藏按钮已更新",
@@ -462,25 +449,8 @@ export default function TabsManagerView({
     })()
   }, [])
 
-  function onChangeAutoInterval(seconds: number) {
-    if (seconds !== 0 && !webDAVConfigured()) {
-      openWebDAVSettings()
-      return
-    }
-    setAutoSyncInterval(seconds)
-    setAutoInterval(seconds)
-    setAutoSyncProvider(seconds === 0 ? null : "webdav")
-    setAutoProvider(seconds === 0 ? null : "webdav")
-  }
-
   function webDAVStatusLabel(): string {
-    if (autoProvider === "webdav" && autoInterval !== 0) return "已启用"
     return webDAVConfigured() ? "已配置" : "未配置"
-  }
-
-  function autoSyncTitle(): string {
-    if (autoInterval === 0) return "自动同步：关闭"
-    return `自动同步：WebDAV · ${autoSyncLabel(autoInterval)}`
   }
 
   async function openWebDAVSettings() {
@@ -488,8 +458,6 @@ export default function TabsManagerView({
       element: <WebDAVSettingsView />,
       modalPresentationStyle: "pageSheet",
     })
-    setAutoProvider(getAutoSyncProvider())
-    setAutoInterval(getAutoSyncInterval())
     setSyncMeta(getSyncMeta())
   }
 
@@ -566,32 +534,11 @@ export default function TabsManagerView({
   }
 
   async function handleWebDAVPushResult(r: PushResult): Promise<boolean> {
-    if (r.ok) {
-      await Dialog.alert({ title: "同步完成", message: r.message })
-      return true
-    }
-
-    if (r.risk) {
-      const localText = r.localSummary?.label ?? "未知"
-      const remoteText = r.remoteSummary?.label ?? "未知"
-      const message = `本机：${localText}\nWebDAV：${remoteText}\n\n仍然上传会先保存当前 WebDAV 快照，再上传本机数据。`
-
-      const continueUpload = await Dialog.confirm({
-        title: "本机数据少于 WebDAV",
-        message,
-        confirmLabel: "仍然上传",
-        cancelLabel: "取消",
-      })
-      if (!continueUpload) return false
-
-      const forced = await pushToCloud({ force: true, skipRiskCheck: true })
-      setSyncMeta(getSyncMeta())
-      await Dialog.alert({ title: forced.ok ? "同步完成" : "同步失败", message: forced.message })
-      return forced.ok
-    }
-
-    await Dialog.alert({ title: "同步失败", message: r.message })
-    return false
+    await Dialog.alert({
+      title: r.ok ? "同步完成" : "同步失败",
+      message: r.message,
+    })
+    return r.ok
   }
 
   async function onSyncUp() {
@@ -684,16 +631,6 @@ export default function TabsManagerView({
                 <Button title="设置" systemImage="gearshape" action={openWebDAVSettings} />
                 <Button title="上传" systemImage="arrow.up" action={onSyncUp} />
                 <Button title="恢复" systemImage="arrow.uturn.backward" action={openWebDAVHistory} />
-                <Menu title={autoSyncTitle()} systemImage="clock.arrow.2.circlepath">
-                  {AUTO_SYNC_OPTIONS.map((opt: { label: string; seconds: number }) => (
-                    <Button
-                      key={`auto-${opt.seconds}`}
-                      title={opt.label}
-                      systemImage={opt.seconds === autoInterval ? "checkmark" : undefined}
-                      action={() => onChangeAutoInterval(opt.seconds)}
-                    />
-                  ))}
-                </Menu>
                 <Button
                   title={webDAVDisplayPath() || "尚未配置路径"}
                   systemImage="doc.text.magnifyingglass"
@@ -959,7 +896,6 @@ function WebDAVSettingsView() {
 
   function saveAndClose() {
     persistConfig()
-    setAutoSyncProvider(webDAVConfigured() ? "webdav" : null)
     dismiss()
   }
 
@@ -1351,12 +1287,17 @@ function GroupView({ groupId }: { groupId: string }) {
   const [loaded, setLoaded] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  const [listRevision, setListRevision] = useState(0)
   const sections = useObservable<DaySection[]>([])
+
+  function refreshSections(bookmarks: Bookmark[]) {
+    sections.setValue(groupByDay(bookmarks))
+  }
 
   async function reload() {
     const s = await loadStore()
     const nextGroup = s.groups.find((item: Group) => item.id === groupId)
-    sections.setValue(groupByDay(nextGroup?.bookmarks ?? []))
+    refreshSections(nextGroup?.bookmarks ?? [])
     setStore({ ...s })
     setLoaded(true)
   }
@@ -1372,7 +1313,7 @@ function GroupView({ groupId }: { groupId: string }) {
       trash: store.trash ? [...store.trash] : undefined,
     }
     moveBookmarksToTrash(nextStore, nextGroup, [bookmarkId])
-    sections.setValue(groupByDay(nextGroup.bookmarks))
+    refreshSections(nextGroup.bookmarks)
     setStore(nextStore)
     setSelected(selected.filter(id => id !== bookmarkId))
     await saveStore(nextStore)
@@ -1406,7 +1347,7 @@ function GroupView({ groupId }: { groupId: string }) {
     const target = await chooseMoveTarget("移动到分组")
     if (!target) return
     if (moveBookmark(store, group.id, bookmarkId, target.id)) {
-      sections.setValue(groupByDay(group.bookmarks))
+      refreshSections(group.bookmarks)
       await saveStore(store)
       setStore({ ...store })
     }
@@ -1427,7 +1368,7 @@ function GroupView({ groupId }: { groupId: string }) {
             : item,
         ),
       }
-      sections.setValue(groupByDay(nextStore.groups.find(item => item.id === group.id)?.bookmarks ?? []))
+      refreshSections(nextStore.groups.find(item => item.id === group.id)?.bookmarks ?? [])
       setStore(nextStore)
       await saveStore(nextStore)
     }
@@ -1477,7 +1418,7 @@ function GroupView({ groupId }: { groupId: string }) {
     if (!target) return
     const moved = moveBookmarks(store, group.id, selected, target.id)
     if (moved === 0) return
-    sections.setValue(groupByDay(group.bookmarks))
+    refreshSections(group.bookmarks)
     await saveStore(store)
     setStore({ ...store })
     exitSelect()
@@ -1497,10 +1438,19 @@ function GroupView({ groupId }: { groupId: string }) {
       trash: store.trash ? [...store.trash] : undefined,
     }
     moveBookmarksToTrash(nextStore, nextGroup, selected)
-    sections.setValue(groupByDay(nextGroup.bookmarks))
-    setStore(nextStore)
-    exitSelect()
-    await saveStore(nextStore)
+    try {
+      await saveStore(nextStore)
+      refreshSections(nextGroup.bookmarks)
+      setStore(nextStore)
+      exitSelect()
+      setListRevision(current => current + 1)
+    } catch (error) {
+      await reload()
+      await Dialog.alert({
+        title: "删除失败",
+        message: String(error),
+      })
+    }
   }
 
   const allSelected =
@@ -1508,6 +1458,7 @@ function GroupView({ groupId }: { groupId: string }) {
 
   return (
     <List
+      key={`group-bookmarks-list-${listRevision}`}
       navigationTitle={group?.name ?? "分组"}
       navigationBarTitleDisplayMode="inline"
       onAppear={reload}
@@ -1885,11 +1836,16 @@ function FavoritesView() {
   const [loaded, setLoaded] = useState(false)
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  const [listRevision, setListRevision] = useState(0)
   const sections = useObservable<DaySection[]>([])
+
+  function refreshSections(bookmarks: Bookmark[]) {
+    sections.setValue(groupByDay(bookmarks))
+  }
 
   async function reload() {
     const s = await loadStore()
-    sections.setValue(groupByDay(getFavorites(s)))
+    refreshSections(getFavorites(s))
     setStore({ ...s })
     setLoaded(true)
   }
@@ -1901,7 +1857,7 @@ function FavoritesView() {
       ...store,
       favorites: getFavorites(store).filter(bookmark => bookmark.id !== id),
     }
-    sections.setValue(groupByDay(nextStore.favorites ?? []))
+    refreshSections(nextStore.favorites ?? [])
     setStore(nextStore)
     setSelected(selected.filter(x => x !== id))
     await saveStore(nextStore)
@@ -1915,7 +1871,7 @@ function FavoritesView() {
           bookmark.id === b.id ? { ...bookmark, read: true } : bookmark,
         ),
       }
-      sections.setValue(groupByDay(nextStore.favorites ?? []))
+      refreshSections(nextStore.favorites ?? [])
       setStore(nextStore)
       await saveStore(nextStore)
     }
@@ -1957,10 +1913,19 @@ function FavoritesView() {
       ...store,
       favorites: getFavorites(store).filter(bookmark => !selectedIds.has(bookmark.id)),
     }
-    sections.setValue(groupByDay(nextStore.favorites ?? []))
-    setStore(nextStore)
-    exitSelect()
-    await saveStore(nextStore)
+    try {
+      await saveStore(nextStore)
+      refreshSections(nextStore.favorites ?? [])
+      setStore(nextStore)
+      exitSelect()
+      setListRevision(current => current + 1)
+    } catch (error) {
+      await reload()
+      await Dialog.alert({
+        title: "删除失败",
+        message: String(error),
+      })
+    }
   }
 
   const allSelected =
@@ -1968,6 +1933,7 @@ function FavoritesView() {
 
   return (
     <List
+      key={`favorite-bookmarks-list-${listRevision}`}
       navigationTitle="收藏"
       navigationBarTitleDisplayMode="inline"
       onAppear={reload}

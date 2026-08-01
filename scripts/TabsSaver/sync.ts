@@ -6,7 +6,6 @@ import { loadStore, overwriteStore, type Store } from "./store"
 
 const LAST_SYNC_KEY = "tab.lastSyncAt"
 const LAST_RESULT_KEY = "tab.lastSyncResult"
-const INTERVAL_KEY = "tab.autoSyncInterval"
 const WEBDAV_URL_KEY = "tab.webdav.url"
 const WEBDAV_BACKUP_DIR_KEY = "tab.webdav.backupDir"
 const WEBDAV_USERNAME_KEY = "tab.webdav.username"
@@ -15,19 +14,8 @@ const WEBDAV_MAX_BACKUPS_KEY = "tab.webdav.maxBackups"
 const WEBDAV_KNOWN_BACKUPS_KEY = "tab.webdav.knownBackups"
 const RESTORE_UNDO_META_KEY = "tab.restoreUndoMeta"
 const RESTORE_UNDO_FILE = FileManager.safariBrowserDirectory + "/tabs-saver-restore-undo.json"
-const LARGE_DELETE_THRESHOLD = 5
-const LARGE_DELETE_RATIO = 0.75
 
 let syncLock = false
-
-export type AutoSyncProvider = "webdav"
-export const AUTO_SYNC_OPTIONS = [
-  { label: "关闭", seconds: 0 },
-  { label: "每次打开", seconds: -1 },
-  { label: "每 1 小时", seconds: 3600 },
-  { label: "每 6 小时", seconds: 21600 },
-  { label: "每 24 小时", seconds: 86400 },
-]
 
 export type StoreSummary = {
   groups: number
@@ -61,9 +49,6 @@ export type RestoreResult = {
 export type PushResult = {
   ok: boolean
   message: string
-  risk?: boolean
-  localSummary?: StoreSummary
-  remoteSummary?: StoreSummary
 }
 export type WebDAVConfig = {
   url: string
@@ -74,23 +59,6 @@ export type WebDAVConfig = {
 }
 export type SyncResult = "ok" | "failed" | "never"
 export type SyncMeta = { lastSyncAt: number | null; lastResult: SyncResult }
-
-export function getAutoSyncInterval(): number {
-  const v = Storage.get<number>(INTERVAL_KEY)
-  return typeof v === "number" ? v : 0
-}
-export function setAutoSyncInterval(seconds: number): void {
-  Storage.set(INTERVAL_KEY, seconds)
-}
-export function autoSyncLabel(seconds: number): string {
-  return AUTO_SYNC_OPTIONS.find(x => x.seconds === seconds)?.label ?? "关闭"
-}
-export function getAutoSyncProvider(): AutoSyncProvider | null {
-  return webDAVConfigured() ? "webdav" : null
-}
-export function setAutoSyncProvider(provider: AutoSyncProvider | null): void {
-  if (!provider) setAutoSyncInterval(0)
-}
 
 export function getWebDAVConfig(): WebDAVConfig {
   return {
@@ -115,7 +83,6 @@ export function clearWebDAVConfig(): void {
   Storage.set(WEBDAV_PASSWORD_KEY, "")
   Storage.set(WEBDAV_MAX_BACKUPS_KEY, 5)
   Storage.set(WEBDAV_KNOWN_BACKUPS_KEY, "[]")
-  setAutoSyncInterval(0)
 }
 export function webDAVConfigured(): boolean {
   const c = getWebDAVConfig()
@@ -173,11 +140,6 @@ export function summarizeStore(store: Store): StoreSummary {
     updatedAt,
     label: `${groups.length}组 · ${bookmarks}个 · 收藏${favorites}个`,
   }
-}
-function isPossibleAccidentalDelete(local: StoreSummary, remote: StoreSummary): boolean {
-  const lost = remote.bookmarks - local.bookmarks
-  if (lost < LARGE_DELETE_THRESHOLD || remote.bookmarks === 0) return false
-  return local.bookmarks / remote.bookmarks < LARGE_DELETE_RATIO
 }
 function basicAuth(username: string, password: string): string {
   return `Basic ${btoa(`${username}:${password}`)}`
@@ -489,32 +451,12 @@ export async function testWebDAVConnection(): Promise<{
   }
 }
 
-export async function pushToCloud(options?: {
-  force?: boolean
-  skipRiskCheck?: boolean
-}): Promise<PushResult> {
+export async function pushToCloud(): Promise<PushResult> {
   return withSyncLock(async () => {
     if (!webDAVConfigured()) return { ok: false, message: "WebDAV 未配置" }
     try {
       const local = await loadStore()
-      const localSummary = summarizeStore(local)
       const remote = await fetchRemote()
-      const remoteSummary = remote ? summarizeStore(remote) : undefined
-      if (
-        !options?.force &&
-        !options?.skipRiskCheck &&
-        remoteSummary &&
-        isPossibleAccidentalDelete(localSummary, remoteSummary)
-      ) {
-        setMeta("failed")
-        return {
-          ok: false,
-          risk: true,
-          message: "本机收藏明显少于 WebDAV，已暂停上传，避免误删覆盖远端。",
-          localSummary,
-          remoteSummary,
-        }
-      }
       await backupRemoteStore(remote)
       await uploadStore(local)
       await cleanupOldBackups()
@@ -522,8 +464,6 @@ export async function pushToCloud(options?: {
       return {
         ok: true,
         message: "已上传到 WebDAV，并已保存上传前远端快照",
-        localSummary,
-        remoteSummary,
       }
     } catch (e) {
       setMeta("failed")
@@ -672,15 +612,4 @@ export function formatSyncStatus(meta: SyncMeta): string {
     ? `今天 ${hm}`
     : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
   return `${meta.lastResult === "ok" ? "已同步" : "上次失败"} · ${when}`
-}
-export async function maybeAutoSync(): Promise<boolean> {
-  const interval = getAutoSyncInterval()
-  if (interval === 0 || !webDAVConfigured()) return false
-  const meta = getSyncMeta()
-  if (interval > 0 && meta.lastSyncAt != null) {
-    const elapsed = (Date.now() - meta.lastSyncAt) / 1000
-    if (elapsed < interval) return false
-  }
-  const r = await pushToCloud()
-  return r.ok
 }
