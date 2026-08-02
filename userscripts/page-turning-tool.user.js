@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.4
+// @version      1.2.5
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并在悬浮工具栏右侧显示独立翻页按钮。
@@ -48,6 +48,7 @@
     prevButton: null,
     nextButton: null,
     retryTimer: null,
+    refreshRetryCount: 0,
     listenersInstalled: false,
     pagerObserver: null,
     observedPagerRoot: null,
@@ -56,12 +57,15 @@
     idleUsesRequestCallback: false,
     updateInFlight: false,
     updateDirty: false,
-    fallbackTimer: null,
-    fallbackAttempt: 0,
     toolbarObserver: null,
     toolbarResizeObserver: null,
     observedToolbar: null,
-    positionScheduled: false,
+    xvideosNormalizeTimer: null,
+    hydrationTimer: null,
+    hydrationRetried: false,
+    pendingRefreshFlags: 0,
+    refreshScheduled: false,
+    contentDelay: Infinity,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -270,7 +274,7 @@
     STATE.pagerObserver = null;
     STATE.observedPagerRoot = root || null;
     if (!root?.isConnected) return;
-    STATE.pagerObserver = new MutationObserver(() => scheduleUpdate(120));
+    STATE.pagerObserver = new MutationObserver(() => requestRefresh(REFRESH_CONTENT, 120));
     STATE.pagerObserver.observe(root, {
       subtree: true,
       childList: true,
@@ -634,9 +638,12 @@
     }
     const cleanUrl = makeXVideosDisplayPageUrl(page);
     if (!cleanUrl) return;
-    setTimeout(() => {
+    const sourceUrl = location.href;
+    clearTimeout(STATE.xvideosNormalizeTimer);
+    STATE.xvideosNormalizeTimer = setTimeout(() => {
+      STATE.xvideosNormalizeTimer = null;
       try {
-        if (location.href !== cleanUrl) history.replaceState(history.state, document.title, cleanUrl);
+        if (location.href === sourceUrl && location.href !== cleanUrl) history.replaceState(history.state, document.title, cleanUrl);
       } catch (_) {}
     }, 1500);
   }
@@ -1361,7 +1368,7 @@
       clickOrNavigate(candidate);
       return;
     }
-    scheduleUpdate(0);
+    requestRefresh(REFRESH_CONTENT, 0);
   }
 
   function clickOrNavigate(el) {
@@ -1587,12 +1594,6 @@
         // 位置由同一锚点直接计算，连接状态也按该锚点同步设置，
         // 避免两个独立脚本在同一帧交错测量时出现“一边方、一边圆”的短暂错位。
         setConnectedVisual(box, anchor);
-        requestAnimationFrame(() => {
-          if (!box.isConnected) return;
-          const currentAnchor = document.getElementById(BASE_TOOLBAR_ID);
-          refreshConnectedVisual(box);
-          if (currentAnchor && !controlsAreAdjacent(currentAnchor, box)) schedulePosition();
-        });
         return;
       }
     }
@@ -1604,13 +1605,7 @@
   }
 
   function schedulePosition() {
-    if (STATE.positionScheduled) return;
-    STATE.positionScheduled = true;
-    requestAnimationFrame(() => {
-      STATE.positionScheduled = false;
-      const box = document.getElementById(SCRIPT_ID);
-      if (box) applyPosition(box);
-    });
+    requestRefresh(REFRESH_LAYOUT);
   }
 
   function addStyles() {
@@ -1795,6 +1790,16 @@
       if (!box) return;
       box.querySelector(".prev").disabled = !STATE.prev;
       box.querySelector(".next").disabled = !STATE.next;
+      if (!STATE.prev && !STATE.next && !STATE.hydrationRetried && !STATE.hydrationTimer) {
+        STATE.hydrationTimer = setTimeout(() => {
+          STATE.hydrationTimer = null;
+          STATE.hydrationRetried = true;
+          requestRefresh(REFRESH_CONTENT, 0);
+        }, 1200);
+      } else if (STATE.prev || STATE.next) {
+        clearTimeout(STATE.hydrationTimer);
+        STATE.hydrationTimer = null;
+      }
       schedulePosition();
     } finally {
       STATE.updateInFlight = false;
@@ -1845,30 +1850,8 @@
     }, delay);
   }
 
-  function candidateUsable(candidate) {
-    if (!candidate) return false;
-    if (candidate.__paginationUrl) return true;
-    if (candidate.__paginationElement) return Boolean(candidate.__paginationElement.isConnected);
-    return !(candidate instanceof Element) || candidate.isConnected;
-  }
-
-  function scheduleEventUpdate(withFallback = true) {
-    scheduleUpdate(0);
-    clearTimeout(STATE.fallbackTimer);
-    STATE.fallbackAttempt = 0;
-    if (document.hidden || !withFallback) return;
-    const retry = () => {
-      STATE.fallbackTimer = null;
-      if (
-        document.hidden ||
-        (candidateUsable(STATE.prev) && candidateUsable(STATE.next))
-      ) return;
-      scheduleUpdate(0);
-      STATE.fallbackAttempt += 1;
-      const delays = [1000, 2000, 4000];
-      if (STATE.fallbackAttempt < delays.length) STATE.fallbackTimer = setTimeout(retry, delays[STATE.fallbackAttempt]);
-    };
-    STATE.fallbackTimer = setTimeout(retry, 1000);
+  function scheduleEventUpdate() {
+    requestRefresh(REFRESH_CONTENT, 0);
   }
 
   function elementHasPaginationSignal(el) {
@@ -1893,6 +1876,73 @@
       return [...(node.querySelectorAll?.('a, button, [role="button"], [rel~="next"], [rel~="prev"], [data-page], [data-page-number], [aria-current="page"]') || [])]
         .slice(0, 80).some(elementHasPaginationSignal);
     });
+  }
+
+  const REFRESH_STRUCTURE = 1;
+  const REFRESH_CONTENT = 2;
+  const REFRESH_LAYOUT = 4;
+  const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT;
+  const REFRESH_RETRY_DELAYS = [120, 300, 700, 1500, 3000, 6000];
+
+  function scheduleRefreshRetry() {
+    if (document.hidden || STATE.retryTimer || STATE.refreshRetryCount >= REFRESH_RETRY_DELAYS.length) return;
+    const delay = REFRESH_RETRY_DELAYS[STATE.refreshRetryCount++];
+    STATE.retryTimer = setTimeout(() => {
+      STATE.retryTimer = null;
+      requestRefresh(REFRESH_FULL, 0);
+    }, delay);
+  }
+
+  function requestRefresh(flags = REFRESH_FULL, contentDelay = 0) {
+    STATE.pendingRefreshFlags |= flags;
+    if (flags & REFRESH_CONTENT) STATE.contentDelay = Math.min(STATE.contentDelay, Math.max(0, contentDelay));
+    if ((document.hidden && INSTANCE.phase !== "starting") || STATE.refreshScheduled) return;
+    STATE.refreshScheduled = true;
+    const run = () => {
+      STATE.refreshScheduled = false;
+      const currentFlags = STATE.pendingRefreshFlags;
+      const currentContentDelay = Number.isFinite(STATE.contentDelay) ? STATE.contentDelay : 0;
+      STATE.pendingRefreshFlags = 0;
+      STATE.contentDelay = Infinity;
+      const root = document.documentElement || document.body;
+      if (!root) {
+        STATE.pendingRefreshFlags |= REFRESH_FULL;
+        STATE.contentDelay = Math.min(STATE.contentDelay, 0);
+        scheduleRefreshRetry();
+        return;
+      }
+      try {
+        if (currentFlags & REFRESH_STRUCTURE) {
+          STATE.navigating = false;
+          installLifecycleListenersOnce();
+          installSharedHistoryHook();
+          ensureToolbar();
+          ensureDocumentObserver();
+          normalizeXVideosHashLater();
+        }
+        if (currentFlags & REFRESH_CONTENT) scheduleUpdate(currentContentDelay);
+        if (currentFlags & REFRESH_LAYOUT) {
+          const box = document.getElementById(SCRIPT_ID);
+          if (box) applyPosition(box);
+        }
+        STATE.initialized = true;
+        INSTANCE.phase = "running";
+        STATE.refreshRetryCount = 0;
+        if (STATE.retryTimer) {
+          clearTimeout(STATE.retryTimer);
+          STATE.retryTimer = null;
+        }
+      } catch (error) {
+        STATE.initialized = false;
+        INSTANCE.phase = "failed";
+        STATE.pendingRefreshFlags |= REFRESH_FULL;
+        STATE.contentDelay = Math.min(STATE.contentDelay, 0);
+        log("刷新恢复中", error);
+        scheduleRefreshRetry();
+      }
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 16);
   }
 
   function installSharedHistoryHook() {
@@ -1947,27 +1997,32 @@
     }, true);
   }
 
+  function recoverRefresh() {
+    STATE.refreshRetryCount = 0;
+    requestRefresh(REFRESH_FULL, 0);
+  }
+
   function installLifecycleListenersOnce() {
     if (STATE.listenersInstalled) return;
     STATE.listenersInstalled = true;
     window.addEventListener(SHARED_URL_CHANGE_EVENT, () => {
       STATE.navigating = false;
+      STATE.hydrationRetried = false;
+      clearTimeout(STATE.hydrationTimer);
+      STATE.hydrationTimer = null;
       scheduleEventUpdate();
     });
     installNodeSeekNavigationGuard();
-    window.addEventListener("floating-accessories-change", () => {
-      ensureToolbar();
-      schedulePosition();
-    });
-    window.addEventListener("resize", schedulePosition);
-    window.addEventListener("scroll", schedulePosition, { passive: true });
-    window.visualViewport?.addEventListener("resize", schedulePosition);
-    window.visualViewport?.addEventListener("scroll", schedulePosition);
-    window.addEventListener("pageshow", () => resume("pageshow"));
-    window.addEventListener("focus", () => resume("focus"));
-    document.addEventListener("readystatechange", () => resume("readystatechange"));
+    window.addEventListener("floating-accessories-change", () => requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT));
+    window.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
+    window.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT), { passive: true });
+    window.visualViewport?.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
+    window.visualViewport?.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT));
+    window.addEventListener("pageshow", recoverRefresh);
+    window.addEventListener("focus", recoverRefresh);
+    document.addEventListener("readystatechange", recoverRefresh);
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) resume("visible");
+      if (!document.hidden) recoverRefresh();
     });
   }
 
@@ -1977,54 +2032,22 @@
       const currentBox = document.getElementById(SCRIPT_ID);
       const toolbarBroken = !currentBox || currentBox !== STATE.toolbar || currentBox.querySelector(".prev") !== STATE.prevButton || currentBox.querySelector(".next") !== STATE.nextButton;
       if (toolbarBroken || document.getElementById(STYLE_ID) !== STATE.styleElement || !STATE.styleElement?.isConnected || mutations.some(mutationTouchesRelevantUi)) {
-        installSharedHistoryHook();
-        ensureToolbar();
-        scheduleEventUpdate(false);
+        requestRefresh(REFRESH_FULL, 120);
       }
     });
     STATE.observer.observe(document, { subtree: true, childList: true });
   }
 
   function resume() {
-    const root = document.documentElement || document.body;
-    if (!root) {
-      if (!STATE.retryTimer) {
-        STATE.retryTimer = setTimeout(() => {
-          STATE.retryTimer = null;
-          resume("root-ready");
-        }, 80);
-      }
-      return false;
-    }
-    STATE.navigating = false;
-    installSharedHistoryHook();
-    ensureToolbar();
-    ensureDocumentObserver();
-    installLifecycleListenersOnce();
-    normalizeXVideosHashLater();
-    scheduleEventUpdate();
-    STATE.initialized = true;
-    INSTANCE.phase = "running";
+    recoverRefresh();
     return true;
   }
 
   function init() {
-    try {
-      resume("init");
-    } catch (error) {
-      STATE.initialized = false;
-      INSTANCE.phase = "failed";
-      if (!STATE.retryTimer) {
-        STATE.retryTimer = setTimeout(() => {
-          STATE.retryTimer = null;
-          init();
-        }, 120);
-      }
-      log("初始化恢复中", error);
-    }
+    requestRefresh(REFRESH_FULL, 0);
   }
 
   INSTANCE.resume = resume;
   init();
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => resume("dom-ready"), { once: true });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => requestRefresh(REFRESH_FULL, 0), { once: true });
 })();

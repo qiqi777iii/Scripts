@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.2.10
+// @version 2.3.1
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -59,21 +59,19 @@
   let dragging = false
   let moved = false
   let startX = 0, startY = 0, startLeft = 0, startTop = 0
-  let positionSyncScheduled = false
+  let pendingRefreshFlags = 0
+  let refreshFrame = null
+  let savedVisualEpoch = 0
   let rootObserver = null
   let observedRoot = null
   let headObserver = null
   let observedHead = null
-  let healthCheckQueued = false
   let globalListenersInstalled = false
   let neighborResizeObserver = null
   let neighborMutationObserver = null
   let observedNeighbor = null
-  let healthWatchdogTimer = null
   let bootRetryTimer = null
   let bootRetryCount = 0
-  let startupPositionTimers = []
-  const HEALTH_WATCHDOG_INTERVAL = 60000
   const BOOT_RETRY_DELAYS = [30, 120, 500, 1500, 3000, 6000]
 
   function uid() {
@@ -240,9 +238,10 @@
 
     const added = addTabsToGroup(group, tabs)
     if (added > 0) await saveStore(file, store)
+    savedVisualEpoch += 1
+    setSavedVisual(true)
     if (!closeAfter) {
       showToast(added > 0 ? `已收藏 ${added} 个标签页` : "已收藏过")
-      setSavedVisual(true)
       return
     }
 
@@ -391,17 +390,19 @@
     } else {
       showToast("未收藏")
     }
+    savedVisualEpoch += 1
     setSavedVisual(false)
   }
 
   async function refreshSavedVisual() {
     const href = location.href
+    const epoch = ++savedVisualEpoch
     try {
       const { file } = storePath()
       const store = await loadStore(file)
-      if (location.href === href) setSavedVisual(hasBookmark(store, href))
+      if (epoch === savedVisualEpoch && location.href === href) setSavedVisual(hasBookmark(store, href))
     } catch (_) {
-      if (location.href === href) setSavedVisual(false)
+      if (epoch === savedVisualEpoch && location.href === href) setSavedVisual(false)
     }
   }
 
@@ -421,6 +422,7 @@
 #${WRAP_ID}{position:fixed;left:0;top:0;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top;}
 #${BUTTON_ID}{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px var(--combined-separator);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,background .2s,color .2s,box-shadow .2s,border-radius .12s ease;}
 #${BUTTON_ID}[data-connected-right="true"]{border-radius:999px 0 0 999px;box-shadow:inset .5px 0 0 var(--combined-separator),inset 0 .5px 0 var(--combined-separator),inset 0 -.5px 0 var(--combined-separator);}
+#${BUTTON_ID}[data-connected-right="true"]::after{content:"";position:absolute;z-index:2;right:1px;top:50%;width:1px;height:16px;background:var(--combined-separator);transform:translateY(-50%);pointer-events:none;}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
 #${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:rgba(229,229,234,.96);}
 #${TOAST_ID}{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.76);color:white;font:14px/18px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .2s;pointer-events:none;}
@@ -568,19 +570,40 @@
     wrap.style.top = "auto"
   }
 
-  function schedulePositionStabilize() {
-    if (positionSyncScheduled) return
-    positionSyncScheduled = true
+  const REFRESH_STRUCTURE = 1
+  const REFRESH_CONTENT = 2
+  const REFRESH_LAYOUT = 4
+  const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT
+
+  function requestRefresh(flags = REFRESH_FULL) {
+    pendingRefreshFlags |= flags
+    if ((document.hidden && INSTANCE.phase === "running") || refreshFrame != null) return
     const run = () => {
-      positionSyncScheduled = false
-      if (!wrap || dragging) return
-      if (savedPosition) applySavedPosition()
-      else applyDefaultPosition()
-      refreshConnectedVisual()
-      wrap.style.transform = "translate3d(0,0,0)"
+      refreshFrame = null
+      const currentFlags = pendingRefreshFlags
+      pendingRefreshFlags = 0
+      try {
+        if (currentFlags & REFRESH_STRUCTURE) ensureButtonHealthy()
+        if (currentFlags & REFRESH_CONTENT) void refreshSavedVisual()
+        if (currentFlags & REFRESH_LAYOUT) {
+          if (!wrap || dragging) return
+          if (savedPosition) applySavedPosition()
+          else applyDefaultPosition()
+          refreshConnectedVisual()
+          wrap.style.transform = "translate3d(0,0,0)"
+        }
+      } catch (_) {
+        INSTANCE.phase = "failed"
+        pendingRefreshFlags |= REFRESH_FULL
+        scheduleBootRetry()
+      }
     }
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run)
-    else setTimeout(run, 16)
+    if (typeof requestAnimationFrame === "function") refreshFrame = requestAnimationFrame(run)
+    else refreshFrame = setTimeout(run, 16)
+  }
+
+  function schedulePositionStabilize() {
+    requestRefresh(REFRESH_LAYOUT)
   }
 
   function onPointerDown(e) {
@@ -618,6 +641,7 @@
     e.preventDefault()
     e.stopPropagation()
     dragging = false
+    requestRefresh(REFRESH_LAYOUT)
     button.releasePointerCapture?.(e.pointerId)
     if (moved) {
       // 只保留当前页面内的临时位置；刷新后恢复固定默认位置。
@@ -699,19 +723,12 @@
     window.addEventListener("scroll", schedulePositionStabilize, { passive: true })
     window.visualViewport?.addEventListener("resize", schedulePositionStabilize)
     window.visualViewport?.addEventListener("scroll", schedulePositionStabilize)
-    window.addEventListener(SHARED_URL_CHANGE_EVENT, refreshSavedVisual)
-    window.addEventListener("pageshow", () => { refreshSavedVisual(); scheduleHealthCheck(); startHealthWatchdog() })
-    window.addEventListener("pagehide", stopHealthWatchdog)
-    window.addEventListener("focus", refreshSavedVisual)
-    window.addEventListener("load", scheduleHealthCheck, { once: true })
+    window.addEventListener(SHARED_URL_CHANGE_EVENT, () => requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT))
+    window.addEventListener("pageshow", () => requestRefresh(REFRESH_FULL))
+    window.addEventListener("focus", () => requestRefresh(REFRESH_FULL))
+    window.addEventListener("load", () => requestRefresh(REFRESH_FULL), { once: true })
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) {
-        stopHealthWatchdog()
-        return
-      }
-      refreshSavedVisual()
-      scheduleHealthCheck()
-      startHealthWatchdog()
+      if (!document.hidden) requestRefresh(REFRESH_FULL)
     })
   }
 
@@ -727,7 +744,8 @@
       if (wrap && wrap !== currentWrap) wrap.remove?.()
       wrap = null
       button = null
-      resumeButtonRuntime(true)
+      createButton()
+      void refreshSavedVisual()
       return
     }
     wrap = currentWrap
@@ -739,14 +757,7 @@
   }
 
   function scheduleHealthCheck() {
-    if (healthCheckQueued) return
-    healthCheckQueued = true
-    const run = () => {
-      healthCheckQueued = false
-      ensureButtonHealthy()
-    }
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run)
-    else setTimeout(run, 16)
+    requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT)
   }
 
   function watchHead(head) {
@@ -792,20 +803,6 @@
     rootObserver.observe(document, { childList: true, subtree: true })
   }
 
-  function stopHealthWatchdog() {
-    if (!healthWatchdogTimer) return
-    clearTimeout(healthWatchdogTimer)
-    healthWatchdogTimer = null
-  }
-
-  function startHealthWatchdog() {
-    if (healthWatchdogTimer || document.hidden) return
-    healthWatchdogTimer = setTimeout(() => {
-      healthWatchdogTimer = null
-      if (!document.hidden) scheduleHealthCheck()
-    }, HEALTH_WATCHDOG_INTERVAL)
-  }
-
   function createButton() {
     const existingWrap = document.getElementById(WRAP_ID)
     const existingButton = document.getElementById(BUTTON_ID)
@@ -835,12 +832,9 @@
   function resumeButtonRuntime(refreshState = false) {
     injectCSS()
     const created = createButton()
-    // UI 先独立出现；存储状态读取异步执行，不参与按钮创建成败。
-    if (created || refreshState) void refreshSavedVisual()
     installPositionListeners()
     startDomGuard()
-    startHealthWatchdog()
-    schedulePositionStabilize()
+    requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT | ((created || refreshState) ? REFRESH_CONTENT : 0))
     return Boolean(wrap?.isConnected && button?.isConnected)
   }
 
@@ -853,11 +847,6 @@
     }, delay)
   }
 
-  function scheduleStartupPositionConvergence() {
-    startupPositionTimers.forEach(clearTimeout)
-    startupPositionTimers = [120, 500, 1500, 3000, 6000].map(delay => setTimeout(schedulePositionStabilize, delay))
-  }
-
   function boot() {
     if (!document.documentElement) {
       scheduleBootRetry()
@@ -867,7 +856,6 @@
       installSharedHistoryHook()
       if (!resumeButtonRuntime(true)) throw new Error("收藏按钮尚未连接")
       scheduleHealthCheck()
-      scheduleStartupPositionConvergence()
       bootRetryCount = 0
       if (bootRetryTimer) {
         clearTimeout(bootRetryTimer)

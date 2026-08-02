@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.0
+// @version      1.6.1
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
@@ -50,13 +50,16 @@
     ]);
 
     let enabled = getVal('newTabEnabled', false);
+    let enabledRevision = 0;
     const sharedSiteKey = getSharedSiteKey(location.hostname);
     const sharedEnabledKey = SHARED_ENABLED_KEY_PREFIX + sharedSiteKey;
-    let toolbar, linkBtn, styleElement, bodyObserver, toolbarEnsureTimer, neighborResizeObserver, neighborMutationObserver, observedNeighbor;
+    let toolbar, linkBtn, styleElement, bodyObserver, neighborResizeObserver, neighborMutationObserver, observedNeighbor;
     let listenersInstalled = false;
     let lastHref = location.href;
-    let urlRefreshTimer = null;
     let initRetryTimer = null;
+    let refreshRetryCount = 0;
+    let pendingRefreshFlags = 0;
+    let refreshFrame = null;
     // 页面内临时位置；刷新页面后变量会重建并恢复默认位置。
     let savedPosition = null;
     let dragging = false;
@@ -65,7 +68,6 @@
     let dragNeighborToolbar = null, startNeighborLeft = 0, startNeighborTop = 0;
     let backgroundToastTimer = null;
     let backgroundToastRemoveTimer = null;
-    let visualBurstTimers = [];
     let valueChangeListenerInstalled = false;
 
     function getVal(key, def) {
@@ -104,20 +106,21 @@
     }
 
     async function loadEnabledState() {
+        const revision = enabledRevision;
         const localValue = getVal('newTabEnabled', false);
-        if (typeof GM === 'undefined' || !GM.getValue) {
-            enabled = localValue;
-            return;
+        let nextValue = localValue;
+        if (typeof GM !== 'undefined' && GM.getValue) {
+            try {
+                const sharedValue = await GM.getValue(sharedEnabledKey, null);
+                nextValue = sharedValue === null ? localValue : Boolean(sharedValue);
+                if (sharedValue === null && GM.setValue) await GM.setValue(sharedEnabledKey, nextValue);
+            } catch (_) {
+                nextValue = localValue;
+            }
         }
-
-        try {
-            const sharedValue = await GM.getValue(sharedEnabledKey, null);
-            enabled = sharedValue === null ? localValue : Boolean(sharedValue);
-            if (sharedValue === null && GM.setValue) await GM.setValue(sharedEnabledKey, enabled);
-            setVal('newTabEnabled', enabled);
-        } catch (_) {
-            enabled = localValue;
-        }
+        if (revision !== enabledRevision) return;
+        enabled = nextValue;
+        setVal('newTabEnabled', enabled);
     }
 
     function saveEnabledState() {
@@ -261,9 +264,10 @@
         valueChangeListenerInstalled = true;
         GM.addValueChangeListener(sharedEnabledKey, function (_key, _oldValue, newValue) {
             if (typeof newValue !== 'boolean' || newValue === enabled) return;
+            enabledRevision += 1;
             enabled = newValue;
             setVal('newTabEnabled', enabled);
-            updateBtn();
+            requestRefresh(REFRESH_CONTENT);
         });
     }
 
@@ -272,18 +276,63 @@
         else setTimeout(fn, 16);
     }
 
-    // 健康检查 + 默认队形同步（多处兜底共用）。
-    function ensureToolbarAndSync() {
-        const wasHealthy = isToolbarHealthy();
-        ensureToolbar();
-        if (!wasHealthy || !savedPosition) syncDefaultPosition();
+    const REFRESH_STRUCTURE = 1;
+    const REFRESH_CONTENT = 2;
+    const REFRESH_LAYOUT = 4;
+    const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT;
+    const REFRESH_RETRY_DELAYS = [120, 300, 700, 1500, 3000, 6000];
+
+    function scheduleRefreshRetry() {
+        if (document.hidden || initRetryTimer || refreshRetryCount >= REFRESH_RETRY_DELAYS.length) return;
+        const delay = REFRESH_RETRY_DELAYS[refreshRetryCount++];
+        initRetryTimer = setTimeout(function () {
+            initRetryTimer = null;
+            requestRefresh(REFRESH_FULL);
+        }, delay);
     }
 
-    function scheduleVisualBurst() {
-        visualBurstTimers.forEach(clearTimeout);
-        visualBurstTimers = [0, 120, 500, 1500].map(function (ms) {
-            return setTimeout(ensureToolbarAndSync, ms);
-        });
+    function requestRefresh(flags = REFRESH_FULL) {
+        pendingRefreshFlags |= flags;
+        if ((document.hidden && INSTANCE.phase !== 'starting') || refreshFrame != null) return;
+        const run = function () {
+            refreshFrame = null;
+            const currentFlags = pendingRefreshFlags;
+            pendingRefreshFlags = 0;
+            const root = document.documentElement || document.body;
+            if (!root) {
+                pendingRefreshFlags |= REFRESH_FULL;
+                scheduleRefreshRetry();
+                return;
+            }
+            try {
+                if (currentFlags & REFRESH_STRUCTURE) {
+                    installPositionListenersOnce();
+                    hookHistoryForUrlChange();
+                    ensureToolbar();
+                    startBodyGuard();
+                }
+                if (currentFlags & REFRESH_CONTENT) updateBtn();
+                if (currentFlags & REFRESH_LAYOUT) {
+                    if (!toolbar || dragging) return;
+                    if (savedPosition) applySavedPosition();
+                    else applyDefaultPosition();
+                    refreshConnectedVisual();
+                    toolbar.style.transform = 'translate3d(0,0,0)';
+                }
+                INSTANCE.phase = 'running';
+                refreshRetryCount = 0;
+                if (initRetryTimer) {
+                    clearTimeout(initRetryTimer);
+                    initRetryTimer = null;
+                }
+            } catch (_) {
+                INSTANCE.phase = 'failed';
+                pendingRefreshFlags |= REFRESH_FULL;
+                scheduleRefreshRetry();
+            }
+        };
+        nextFrame(run);
+        refreshFrame = true;
     }
 
     function findLinkTarget(target) {
@@ -669,12 +718,6 @@
         toolbar.style.top = 'auto';
     }
 
-    function syncDefaultPosition() {
-        if (!toolbar || dragging) return;
-        if (savedPosition) applySavedPosition();
-        else applyDefaultPosition();
-    }
-
     // 纯 fixed 定位：允许页面内临时拖动；刷新页面后恢复默认位置。
 
     function buildToolbar() {
@@ -758,6 +801,7 @@
         e.preventDefault();
         e.stopPropagation();
         dragging = false;
+        requestRefresh(REFRESH_LAYOUT);
         linkBtn.releasePointerCapture?.(e.pointerId);
 
         if (moved && dragNeighborToolbar) {
@@ -768,9 +812,10 @@
             // 悬浮工具栏未加载时仅保留本页面内的临时位置。
             savedPosition = clampPos(parseInt(toolbar.style.left, 10) || 0, parseInt(toolbar.style.top, 10) || 0);
         } else if (e.type !== 'pointercancel') {
+            enabledRevision += 1;
             enabled = !enabled;
             saveEnabledState();
-            updateBtn();
+            requestRefresh(REFRESH_CONTENT);
         }
         dragNeighborToolbar = null;
     }
@@ -795,12 +840,8 @@
         return buildToolbar();
     }
 
-    function scheduleEnsureToolbar(delay) {
-        if (toolbarEnsureTimer) return;
-        toolbarEnsureTimer = setTimeout(function () {
-            toolbarEnsureTimer = null;
-            nextFrame(ensureToolbarAndSync);
-        }, delay == null ? 30 : delay);
+    function scheduleEnsureToolbar() {
+        requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT);
     }
 
     function mutationTouchesFloatingUi(mutation) {
@@ -818,25 +859,18 @@
         bodyObserver = new MutationObserver(function (mutations) {
             if (!mutations.some(mutationTouchesFloatingUi)) return;
             // 相关节点变化才调度一次轻量健康检查；不扫描普通页面内容。
-            scheduleEnsureToolbar(30);
+            requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT);
         });
         bodyObserver.observe(document, { childList: true, subtree: true });
     }
 
-    let positionSyncScheduled = false;
-
     function schedulePositionStabilize() {
-        if (positionSyncScheduled) return;
-        positionSyncScheduled = true;
-        nextFrame(function () {
-            positionSyncScheduled = false;
-            if (!toolbar || dragging) return;
-            if (savedPosition) applySavedPosition();
-            else applyDefaultPosition();
-            refreshConnectedVisual();
-            // iOS Safari 偶发 fixed 图层滚动后不重绘；重写 transform 触发合成层刷新。
-            toolbar.style.transform = 'translate3d(0,0,0)';
-        });
+        requestRefresh(REFRESH_LAYOUT);
+    }
+
+    function recoverRefresh() {
+        refreshRetryCount = 0;
+        requestRefresh(REFRESH_FULL);
     }
 
     function installPositionListenersOnce() {
@@ -849,19 +883,15 @@
         window.visualViewport?.addEventListener('scroll', stabilizePosition);
         window.addEventListener(SHARED_URL_CHANGE_EVENT, scheduleUrlRefresh);
         hookHistoryForUrlChange();
-        window.addEventListener('pageshow', init);
-        document.addEventListener('visibilitychange', function () { if (!document.hidden) init(); });
-        window.addEventListener('focus', init);
+        window.addEventListener('pageshow', recoverRefresh);
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) recoverRefresh(); });
+        window.addEventListener('focus', recoverRefresh);
     }
 
     function scheduleUrlRefresh() {
         if (location.href === lastHref) return;
         lastHref = location.href;
-        if (urlRefreshTimer) clearTimeout(urlRefreshTimer);
-        urlRefreshTimer = setTimeout(function () {
-            urlRefreshTimer = null;
-            init();
-        }, 80);
+        requestRefresh(REFRESH_FULL);
     }
 
     function dispatchSharedUrlChange(kind) {
@@ -902,27 +932,8 @@
     }
 
     function init() {
-        if (!document.documentElement && !document.body) {
-            if (!initRetryTimer) {
-                initRetryTimer = setTimeout(function () {
-                    initRetryTimer = null;
-                    init();
-                }, 30);
-            }
-            return false;
-        }
-        hookHistoryForUrlChange();
-        if (!ensureToolbar()) return false;
-        startBodyGuard();
-        installPositionListenersOnce();
-        // 悬浮工具栏稍晚创建时，由 document guard / pageshow / focus 事件驱动同步位置。
-        scheduleVisualBurst();
-        INSTANCE.phase = 'running';
+        requestRefresh(REFRESH_FULL);
         return true;
-    }
-
-    function bootstrap() {
-        init();
     }
 
     async function start() {
@@ -931,22 +942,23 @@
         window.addEventListener('click', handleLinkOpen);
 
         // document-start 先创建基础按钮；GM 状态读取完成后只刷新开关外观，避免存储延迟阻塞 UI。
-        bootstrap();
+        requestRefresh(REFRESH_FULL);
         await loadEnabledState();
-        updateBtn();
+        requestRefresh(REFRESH_CONTENT);
         installEnabledStateListener();
     }
 
     INSTANCE.resume = function () {
         try {
-            init();
+            refreshRetryCount = 0;
+            requestRefresh(REFRESH_FULL);
         } catch (_) {
             INSTANCE.phase = 'failed';
-            scheduleEnsureToolbar(120);
+            scheduleEnsureToolbar();
         }
     };
     void start().catch(function () {
         INSTANCE.phase = 'failed';
-        scheduleEnsureToolbar(120);
+        scheduleEnsureToolbar();
     });
 })();

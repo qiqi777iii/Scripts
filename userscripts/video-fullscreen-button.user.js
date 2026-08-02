@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频全屏按钮
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.3
+// @version      1.2.4
 // @description  检测网页视频，点击按钮后自动播放并切换为全屏。
 // @author       Scripting Agent
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js
@@ -47,11 +47,16 @@
     button: null,
     styleElement: null,
     retryTimer: null,
+    refreshRetryCount: 0,
     listenersInstalled: false,
     baseObserver: null,
     navObserver: null,
-    updateTimer: null,
-    positionScheduled: false,
+    observedBase: null,
+    observedNav: null,
+    videoResizeObserver: null,
+    observedVideos: [],
+    pendingRefreshFlags: 0,
+    refreshScheduled: false,
   };
 
   function log(...args) {
@@ -195,12 +200,7 @@
   }
 
   function schedulePosition() {
-    if (state.positionScheduled) return;
-    state.positionScheduled = true;
-    requestAnimationFrame(() => {
-      state.positionScheduled = false;
-      applyPosition(document.getElementById(SCRIPT_ID));
-    });
+    requestRefresh(REFRESH_LAYOUT);
   }
 
   function addStyles() {
@@ -413,8 +413,20 @@
     window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: SCRIPT_ID, visible: state.visible } }));
   }
 
+  function syncVideoResizeObserver() {
+    if (typeof ResizeObserver !== "function") return;
+    const videos = [...document.querySelectorAll("video")]
+      .filter((video) => !isCoverPreviewVideo(video))
+      .slice(0, 12);
+    if (videos.length === state.observedVideos.length && videos.every((video, index) => video === state.observedVideos[index])) return;
+    state.videoResizeObserver?.disconnect();
+    state.videoResizeObserver = new ResizeObserver(() => requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT));
+    state.observedVideos = videos;
+    videos.forEach((video) => state.videoResizeObserver.observe(video));
+  }
+
   function updateButton() {
-    state.updateTimer = null;
+    syncVideoResizeObserver();
     const activeVideo = findActiveVideo();
     const visible = Boolean(activeVideo);
     state.activeVideo = activeVideo;
@@ -429,9 +441,8 @@
     if (visible) schedulePosition();
   }
 
-  function scheduleUpdate(delay = 80) {
-    clearTimeout(state.updateTimer);
-    state.updateTimer = setTimeout(updateButton, delay);
+  function scheduleUpdate() {
+    requestRefresh(REFRESH_CONTENT);
   }
 
   function mutationTouchesVideoOrToolbar(mutation) {
@@ -450,6 +461,63 @@
         !isCoverPreviewVideo(video) && !video.closest?.(PREVIEW_CONTAINER_SELECTOR)
       );
     });
+  }
+
+  const REFRESH_STRUCTURE = 1;
+  const REFRESH_CONTENT = 2;
+  const REFRESH_LAYOUT = 4;
+  const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT;
+  const REFRESH_RETRY_DELAYS = [120, 300, 700, 1500, 3000, 6000];
+
+  function scheduleRefreshRetry() {
+    if (document.hidden || state.retryTimer || state.refreshRetryCount >= REFRESH_RETRY_DELAYS.length) return;
+    const delay = REFRESH_RETRY_DELAYS[state.refreshRetryCount++];
+    state.retryTimer = setTimeout(() => {
+      state.retryTimer = null;
+      requestRefresh(REFRESH_FULL);
+    }, delay);
+  }
+
+  function requestRefresh(flags = REFRESH_FULL) {
+    state.pendingRefreshFlags |= flags;
+    if ((document.hidden && INSTANCE.phase !== "starting") || state.refreshScheduled) return;
+    state.refreshScheduled = true;
+    const run = () => {
+      state.refreshScheduled = false;
+      const currentFlags = state.pendingRefreshFlags;
+      state.pendingRefreshFlags = 0;
+      const root = document.documentElement || document.body;
+      if (!root) {
+        state.pendingRefreshFlags |= REFRESH_FULL;
+        scheduleRefreshRetry();
+        return;
+      }
+      try {
+        if (currentFlags & REFRESH_STRUCTURE) {
+          installLifecycleListenersOnce();
+          installSharedHistoryHook();
+          createButton();
+          ensureDocumentObserver();
+        }
+        if (currentFlags & REFRESH_CONTENT) updateButton();
+        if (currentFlags & REFRESH_LAYOUT) applyPosition(document.getElementById(SCRIPT_ID));
+        state.initialized = true;
+        INSTANCE.phase = "running";
+        state.refreshRetryCount = 0;
+        if (state.retryTimer) {
+          clearTimeout(state.retryTimer);
+          state.retryTimer = null;
+        }
+      } catch (error) {
+        state.initialized = false;
+        INSTANCE.phase = "failed";
+        state.pendingRefreshFlags |= REFRESH_FULL;
+        log("刷新恢复中", error);
+        scheduleRefreshRetry();
+      }
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 16);
   }
 
   function installSharedHistoryHook() {
@@ -488,6 +556,11 @@
     try { window[SHARED_HISTORY_HOOK_KEY] = { version: 2, eventName: SHARED_URL_CHANGE_EVENT, wrappers, handlers, sequence: Number(marker?.sequence || 0) }; } catch (_) {}
   }
 
+  function recoverRefresh() {
+    state.refreshRetryCount = 0;
+    requestRefresh(REFRESH_FULL);
+  }
+
   function installLifecycleListenersOnce() {
     if (state.listenersInstalled) return;
     state.listenersInstalled = true;
@@ -496,15 +569,16 @@
         const video = event.target;
         if (!(video instanceof HTMLVideoElement) || videoScore(video) < 0) return;
         if (state.activeVideo?.isConnected && video !== state.activeVideo && videoScore(state.activeVideo) >= 0) return;
-        scheduleUpdate(type === "play" || type === "playing" ? 0 : 80);
+        requestRefresh(type === "play" || type === "playing" ? REFRESH_CONTENT | REFRESH_LAYOUT : REFRESH_CONTENT);
       }, true);
     });
-    window.addEventListener("resize", schedulePosition);
-    window.visualViewport?.addEventListener("resize", schedulePosition);
-    window.addEventListener("pageshow", () => resume("pageshow"));
-    window.addEventListener(SHARED_URL_CHANGE_EVENT, () => resume("urlchange"));
+    window.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
+    window.visualViewport?.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
+    window.addEventListener("pageshow", recoverRefresh);
+    window.addEventListener("focus", recoverRefresh);
+    window.addEventListener(SHARED_URL_CHANGE_EVENT, recoverRefresh);
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) resume("visible");
+      if (!document.hidden) recoverRefresh();
     });
   }
 
@@ -512,55 +586,24 @@
     if (state.observer) return;
     state.observer = new MutationObserver((mutations) => {
       if (!document.getElementById(SCRIPT_ID) || document.getElementById(STYLE_ID) !== state.styleElement || !state.styleElement?.isConnected || document.getElementById(SCRIPT_ID) !== state.button) {
-        installSharedHistoryHook();
-        createButton();
-        scheduleUpdate(0);
+        requestRefresh(REFRESH_FULL);
       } else if (mutations.some(mutationTouchesVideoOrToolbar)) {
-        scheduleUpdate(80);
-        schedulePosition();
+        requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT);
       }
     });
     state.observer.observe(document, { subtree: true, childList: true });
   }
 
   function resume() {
-    const root = document.documentElement || document.body;
-    if (!root) {
-      if (!state.retryTimer) {
-        state.retryTimer = setTimeout(() => {
-          state.retryTimer = null;
-          resume("root-ready");
-        }, 80);
-      }
-      return false;
-    }
-    installSharedHistoryHook();
-    createButton();
-    ensureDocumentObserver();
-    installLifecycleListenersOnce();
-    scheduleUpdate(0);
-    state.initialized = true;
-    INSTANCE.phase = "running";
+    recoverRefresh();
     return true;
   }
 
   function init() {
-    try {
-      resume("init");
-    } catch (error) {
-      state.initialized = false;
-      INSTANCE.phase = "failed";
-      if (!state.retryTimer) {
-        state.retryTimer = setTimeout(() => {
-          state.retryTimer = null;
-          init();
-        }, 120);
-      }
-      log("初始化恢复中", error);
-    }
+    requestRefresh(REFRESH_FULL);
   }
 
   INSTANCE.resume = resume;
   init();
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => resume("dom-ready"), { once: true });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => requestRefresh(REFRESH_FULL), { once: true });
 })();

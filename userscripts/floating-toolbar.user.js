@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.2
+// @version      1.6.3
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
@@ -57,7 +57,10 @@
     newTabButton: null,
     closeTabButton: null,
     retryTimer: null,
+    refreshRetryCount: 0,
     listenersInstalled: false,
+    pendingRefreshFlags: 0,
+    refreshScheduled: false,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -370,6 +373,7 @@
         state.suppressClickUntil = Date.now() + 500;
         positionBoundControl(toolbar);
       }
+      requestRefresh(REFRESH_LAYOUT);
       setTimeout(() => { state.dragMoved = false; }, 0);
     };
 
@@ -430,6 +434,7 @@
       const finished = event.detail?.phase === "end" || event.detail?.phase === "cancel";
       state.dragging = !finished;
       positionBoundControl(toolbar);
+      if (finished) requestRefresh(REFRESH_LAYOUT);
     });
 
     state.toolbar = toolbar;
@@ -446,27 +451,81 @@
   function ensureToolbar() {
     const toolbar = createToolbar();
     state.toolbar = toolbar;
-    requestAnimationFrame(() => {
-      if (!state.dragging) positionBoundControl(toolbar);
-    });
+    return toolbar;
+  }
+
+  const REFRESH_STRUCTURE = 1;
+  const REFRESH_CONTENT = 2;
+  const REFRESH_LAYOUT = 4;
+  const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT;
+  const REFRESH_RETRY_DELAYS = [120, 300, 700, 1500, 3000, 6000];
+
+  function scheduleRefreshRetry() {
+    if (document.hidden || state.retryTimer || state.refreshRetryCount >= REFRESH_RETRY_DELAYS.length) return;
+    const delay = REFRESH_RETRY_DELAYS[state.refreshRetryCount++];
+    state.retryTimer = setTimeout(() => {
+      state.retryTimer = null;
+      requestRefresh(REFRESH_FULL);
+    }, delay);
+  }
+
+  function requestRefresh(flags = REFRESH_FULL) {
+    state.pendingRefreshFlags |= flags;
+    if ((document.hidden && INSTANCE.phase !== "starting") || state.refreshScheduled) return;
+    state.refreshScheduled = true;
+    const run = () => {
+      state.refreshScheduled = false;
+      const currentFlags = state.pendingRefreshFlags;
+      state.pendingRefreshFlags = 0;
+      const root = document.documentElement || document.body;
+      if (!root) {
+        state.pendingRefreshFlags |= REFRESH_FULL;
+        scheduleRefreshRetry();
+        return;
+      }
+      try {
+        if (currentFlags & REFRESH_STRUCTURE) {
+          installListenersOnce();
+          ensureToolbar();
+          ensureObserver();
+        }
+        if (currentFlags & REFRESH_CONTENT) state.navigating = false;
+        if (currentFlags & REFRESH_LAYOUT) stabilizePosition();
+        state.initialized = true;
+        INSTANCE.phase = "running";
+        state.refreshRetryCount = 0;
+        if (state.retryTimer) {
+          clearTimeout(state.retryTimer);
+          state.retryTimer = null;
+        }
+      } catch (error) {
+        INSTANCE.phase = "failed";
+        state.pendingRefreshFlags |= REFRESH_FULL;
+        log("刷新恢复中", error);
+        scheduleRefreshRetry();
+      }
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 16);
+  }
+
+  function recoverRefresh() {
+    state.refreshRetryCount = 0;
+    requestRefresh(REFRESH_FULL);
   }
 
   function installListenersOnce() {
     if (state.listenersInstalled) return;
     state.listenersInstalled = true;
-    let resizeTimer = null;
-    const scheduleStabilize = () => {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(stabilizePosition, 120);
-    };
-    window.addEventListener("floating-accessories-change", stabilizePosition);
-    window.addEventListener("resize", scheduleStabilize);
-    window.addEventListener("scroll", scheduleStabilize, { passive: true });
-    window.visualViewport?.addEventListener("resize", scheduleStabilize);
-    window.visualViewport?.addEventListener("scroll", scheduleStabilize);
-    window.addEventListener("pageshow", () => resume("pageshow"));
+    window.addEventListener("floating-accessories-change", () => requestRefresh(REFRESH_LAYOUT));
+    window.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
+    window.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT), { passive: true });
+    window.visualViewport?.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
+    window.visualViewport?.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT));
+    window.addEventListener("pageshow", recoverRefresh);
+    window.addEventListener("focus", recoverRefresh);
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) resume("visible");
+      if (!document.hidden) recoverRefresh();
     });
   }
 
@@ -476,51 +535,24 @@
       const toolbarMissing = !toolbarHealthy(document.getElementById(TOOLBAR_ID));
       const styleMissing = document.getElementById(STYLE_ID) !== state.styleElement || !state.styleElement?.isConnected;
       const boundControlChanged = mutations.some((mutation) => [...mutation.addedNodes, ...mutation.removedNodes].some((node) => node instanceof Element && ([BOUND_LINK_ID, BOOKMARK_TOOLBAR_ID, PAGE_NAVIGATION_ID].includes(node.id) || node.querySelector?.(`#${BOUND_LINK_ID}, #${BOOKMARK_TOOLBAR_ID}, #${PAGE_NAVIGATION_ID}`))));
-      if (toolbarMissing || styleMissing) ensureToolbar();
-      else if (boundControlChanged) stabilizePosition();
+      if (toolbarMissing || styleMissing) requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT);
+      else if (boundControlChanged) requestRefresh(REFRESH_LAYOUT);
     });
     state.observer.observe(document, { subtree: true, childList: true });
   }
 
   function resume() {
-    const root = document.documentElement || document.body;
-    if (!root) {
-      if (!state.retryTimer) {
-        state.retryTimer = setTimeout(() => {
-          state.retryTimer = null;
-          resume("root-ready");
-        }, 80);
-      }
-      return false;
-    }
-    ensureToolbar();
-    ensureObserver();
-    installListenersOnce();
-    state.navigating = false;
-    state.initialized = true;
-    INSTANCE.phase = "running";
+    recoverRefresh();
     return true;
   }
 
   function init() {
-    try {
-      resume("init");
-    } catch (error) {
-      INSTANCE.phase = "failed";
-      state.initialized = false;
-      if (!state.retryTimer) {
-        state.retryTimer = setTimeout(() => {
-          state.retryTimer = null;
-          init();
-        }, 120);
-      }
-      log("初始化恢复中", error);
-    }
+    requestRefresh(REFRESH_FULL);
   }
 
   INSTANCE.resume = resume;
   init();
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => resume("dom-ready"), { once: true });
+    document.addEventListener("DOMContentLoaded", () => requestRefresh(REFRESH_FULL), { once: true });
   }
 })();
