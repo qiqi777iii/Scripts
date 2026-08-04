@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.1
+// @version      1.6.5
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
-// @description  在网页显示悬浮开关，控制链接是否在 Safari 后台新标签页中打开。
+// @description  在网页显示悬浮开关，控制链接是否在 Safari 新标签页中打开并直接跳转。
 // @match        *://*/*
 // @grant        GM.openInTab
 // @grant        GM.getValue
@@ -66,8 +66,6 @@
     let moved = false;
     let startX = 0, startY = 0, startLeft = 0, startTop = 0;
     let dragNeighborToolbar = null, startNeighborLeft = 0, startNeighborTop = 0;
-    let backgroundToastTimer = null;
-    let backgroundToastRemoveTimer = null;
     let valueChangeListenerInstalled = false;
 
     function getVal(key, def) {
@@ -228,7 +226,7 @@
     function shouldBackgroundOpenOnMissAv(a, url) {
         if (!/(^|\.)missav\./i.test(location.hostname)) return true;
 
-        // 详情页中的类型、系列、发行商、导演和标签链接也进入后台标签页；
+        // 详情页中的类型、系列、发行商、导演和标签链接也进入新标签页；
         // 其余站内导航、筛选、排序、翻页、语言切换与账户操作维持网站原本行为。
         if (isMissAvDetailMetadataLink(a, url)) return true;
 
@@ -247,7 +245,7 @@
         if (!['rule34video.com', 'spankbang.com', 'eporner.com', 'xhamster.com', 'pornhub.com'].includes(site)) return null;
         if (getSharedSiteKey(url.hostname) !== site) return false;
 
-        // 这些站只让具体视频详情页进入后台；分类、标签、作者、频道、搜索、
+        // 这些站只让具体视频详情页进入新标签页；分类、标签、作者、频道、搜索、
         // 排序、筛选、翻页、账户与操作链接全部维持网站原本的当前页行为。
         if (site === 'rule34video.com') return /^\/video\/\d+(?:\/|$)/i.test(url.pathname);
         if (site === 'spankbang.com') return /^\/[a-z0-9]+\/video(?:\/|$)/i.test(url.pathname);
@@ -339,32 +337,7 @@
         return target?.closest?.('a[href], area[href]');
     }
 
-    function showBackgroundToast() {
-        const id = '__tb_background_toast__';
-        let toast = document.getElementById(id);
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.id = id;
-            toast.textContent = '后台打开';
-            toast.setAttribute('role', 'status');
-            toast.setAttribute('aria-live', 'polite');
-            toast.style.cssText = 'position:fixed;left:50%;bottom:96px;z-index:2147483647;max-width:calc(100vw - 32px);box-sizing:border-box;padding:8px 14px;border-radius:10px;background:rgba(28,28,30,.88);color:#fff;font:600 14px/20px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;letter-spacing:.01em;text-align:center;white-space:nowrap;pointer-events:none;-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);box-shadow:0 2px 10px rgba(0,0,0,.16);opacity:0;transform:translate(-50%,6px);transition:opacity .12s ease,transform .12s ease;';
-            (document.body || document.documentElement).appendChild(toast);
-        }
-        clearTimeout(backgroundToastTimer);
-        clearTimeout(backgroundToastRemoveTimer);
-        // 保留 2.0.11 的底部样式与时长，只确保 WebKit 先提交 opacity:0 的初始帧。
-        void toast.offsetWidth;
-        toast.style.opacity = '1';
-        toast.style.transform = 'translate(-50%,0)';
-        backgroundToastTimer = setTimeout(function () {
-            toast.style.opacity = '0';
-            toast.style.transform = 'translate(-50%,6px)';
-            backgroundToastRemoveTimer = setTimeout(function () { toast.remove(); }, 140);
-        }, 1000);
-    }
-
-    function openLinkWithAnchor(href, shouldShowToast) {
+    function openLinkWithAnchor(href) {
         const link = document.createElement('a');
         link.href = href;
         link.target = '_blank';
@@ -379,7 +352,6 @@
         (document.body || document.documentElement).appendChild(link);
         try {
             link.click();
-            if (shouldShowToast !== false) showBackgroundToast();
         } catch (_) {}
         setTimeout(function () { link.remove(); }, 0);
     }
@@ -388,12 +360,10 @@
         if (!href) return;
         try {
             if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
-                const task = GM.openInTab(href, { active: false });
-                // Safari 可能已经创建标签，但 GM.openInTab 返回的 Promise 仍未完成；
-                // 提示应跟随已接受的用户操作立即显示，不能等待 Promise。
-                showBackgroundToast();
+                // 前台打开：新标签页创建后直接跳转到该标签页。
+                const task = GM.openInTab(href, { active: true });
                 if (task && typeof task.catch === 'function') {
-                    task.catch(function () { openLinkWithAnchor(href, false); });
+                    task.catch(function () { openLinkWithAnchor(href); });
                 }
                 return;
             }
@@ -514,7 +484,7 @@
         const site = getSharedSiteKey(location.hostname);
         // 这些站会在卡片或 document 的冒泡阶段追加当前页跳转或广告弹窗，
         // 所以视频链接要先接管；封面预览脚本存在时，封面点击交给它处理，
-        // 标题点击仍直接后台打开。
+        // 标题点击仍直接新标签页打开。
         if (!['rule34video.com', 'spankbang.com', 'eporner.com', 'xhamster.com', 'pornhub.com'].includes(site) || !isPlainPrimaryClick(e)) return;
         if (toolbar?.contains(e.target) || isCoverPreviewTarget(e.target, site)) return;
         const a = findLinkTarget(e.target);
@@ -534,7 +504,7 @@
         if (!/^https?:$/i.test(url.protocol) || url.username || url.password) return;
         if (shouldBackgroundOpenOnCuratedVideoSite(url) !== true) return;
         // 封面预览脚本在同一次真实用户点击中同步派发该事件（事件在 content/page 两个 world 间共享）。
-        // 用户激活仍在调用栈上，直接后台打开并提示即可；不再依赖任何手势握手。
+        // 用户激活仍在调用栈上，直接新标签页打开并跳转即可；不再依赖任何手势握手。
         event.preventDefault();
         requestCheckedBackgroundOpen(url.href, null);
     }
@@ -568,16 +538,16 @@
         style.id = '__tb_style__';
         style.textContent = `
 #__tb__{position:fixed;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top,right,bottom,transform;}
-#__tb_btn__{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:999px;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px var(--combined-separator);filter:none;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity .2s,background .2s,color .2s,box-shadow .2s;}
+#__tb_btn__{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:999px;background:#F2F2F7;color:rgba(28,28,30,.82);border:0;box-shadow:inset 0 0 0 .5px var(--combined-separator);filter:none;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity .2s,border-radius .12s ease;}
 #__tb_btn__[data-connected-left="true"][data-connected-right="true"]{border-radius:0;box-shadow:inset 0 .5px 0 var(--combined-separator),inset 0 -.5px 0 var(--combined-separator);}
 #__tb_btn__[data-connected-left="true"][data-connected-right="false"]{border-radius:0 999px 999px 0;box-shadow:inset -.5px 0 0 var(--combined-separator),inset 0 .5px 0 var(--combined-separator),inset 0 -.5px 0 var(--combined-separator);}
 #__tb_btn__[data-connected-left="false"][data-connected-right="true"]{border-radius:999px 0 0 999px;box-shadow:inset .5px 0 0 var(--combined-separator),inset 0 .5px 0 var(--combined-separator),inset 0 -.5px 0 var(--combined-separator);}
-#__tb_btn__[data-connected-left="true"]::before{content:"";position:absolute;z-index:2;left:0;top:50%;width:1px;height:16px;background:var(--combined-separator);transform:translateY(-50%);pointer-events:none;}
+#__tb_btn__[data-connected-left="true"]::before{content:"";position:absolute;z-index:2;left:0;top:7px;bottom:7px;width:1px;background:var(--combined-separator);pointer-events:none;}
 #__tb_btn__[data-enabled="true"]{color:#0A84FF;}
 #__tb_btn__ svg{pointer-events:none;stroke:currentColor;}
-#__tb_btn__:active{transform:none;opacity:.94;background:rgba(229,229,234,.96);}
-#__tb_btn__[data-enabled="true"]:active{background:rgba(229,229,234,.96);}
-@media (prefers-color-scheme: dark){#__tb_btn__{--combined-separator:rgba(255,255,255,.16);background:rgba(44,44,46,.82);color:rgba(255,255,255,.88);}#__tb_btn__[data-enabled="true"]{color:#64D2FF;}#__tb_btn__:active,#__tb_btn__[data-enabled="true"]:active{background:rgba(58,58,60,.92);}}`;
+#__tb_btn__:active{transform:none;opacity:.94;background:#E5E5EA;}
+#__tb_btn__[data-enabled="true"]:active{background:#E5E5EA;}
+@media (prefers-color-scheme: dark){#__tb_btn__{--combined-separator:rgba(255,255,255,.16);background:#2C2C2E;color:rgba(255,255,255,.88);}#__tb_btn__[data-enabled="true"]{color:#64D2FF;}#__tb_btn__:active,#__tb_btn__[data-enabled="true"]:active{background:#3A3A3C;}}`;
         styleElement = style;
         const parent = document.head || document.documentElement || document.body;
         if (parent) parent.appendChild(style);
@@ -592,7 +562,7 @@
         if (!linkBtn) return;
         linkBtn.dataset.enabled = enabled ? 'true' : 'false';
         linkBtn.style.opacity = '1';
-        linkBtn.title = enabled ? '后台新标签页打开：开' : '后台新标签页打开：关';
+        linkBtn.title = enabled ? '新标签页打开：开' : '新标签页打开：关';
     }
 
     function getViewportBox() {

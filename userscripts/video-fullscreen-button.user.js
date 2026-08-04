@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频全屏按钮
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.4
+// @version      1.2.7
 // @description  检测网页视频，点击按钮后自动播放并切换为全屏。
 // @author       Scripting Agent
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js
@@ -213,7 +213,7 @@
     style.textContent = `
       #${SCRIPT_ID} {
         --qvf-text: rgba(28,28,30,.82);
-        --qvf-bg: rgba(242,242,247,.92);
+        --qvf-bg: #F2F2F7;
         --qvf-separator: rgba(60,60,67,.16);
         box-sizing: border-box;
         position: fixed;
@@ -230,8 +230,6 @@
         color: var(--qvf-text);
         background: var(--qvf-bg);
         box-shadow: inset 0 0 0 .5px var(--qvf-separator);
-        -webkit-backdrop-filter: blur(10px) saturate(140%);
-        backdrop-filter: blur(10px) saturate(140%);
         align-items: center;
         justify-content: center;
         cursor: pointer;
@@ -244,13 +242,13 @@
       #${SCRIPT_ID}[data-connected-left="true"] { border-radius: 0 999px 999px 0; box-shadow: inset -.5px 0 0 var(--qvf-separator), inset 0 .5px 0 var(--qvf-separator), inset 0 -.5px 0 var(--qvf-separator); }
       #${SCRIPT_ID}[data-connected-right="true"] { border-radius: 999px 0 0 999px; box-shadow: inset .5px 0 0 var(--qvf-separator), inset 0 .5px 0 var(--qvf-separator), inset 0 -.5px 0 var(--qvf-separator); }
       #${SCRIPT_ID}[data-connected-left="true"][data-connected-right="true"] { border-radius: 0; box-shadow: inset 0 .5px 0 var(--qvf-separator), inset 0 -.5px 0 var(--qvf-separator); }
-      #${SCRIPT_ID}[data-connected-left="true"]::before { content: ""; position: absolute; z-index: 2; left: 0; top: 50%; width: 1px; height: 16px; background: var(--qvf-separator); transform: translateY(-50%); pointer-events: none; }
+      #${SCRIPT_ID}[data-connected-left="true"]::before { content: ""; position: absolute; z-index: 2; left: 0; top: 7px; bottom: 7px; width: 1px; background: var(--qvf-separator); pointer-events: none; }
       #${SCRIPT_ID}:active { background: rgba(118,118,128,.12); }
       #${SCRIPT_ID} svg { width: 20px; height: 20px; display: block; pointer-events: none; }
       @media (prefers-color-scheme: dark) {
         #${SCRIPT_ID} {
           --qvf-text: rgba(255,255,255,.94);
-          --qvf-bg: rgba(44,44,46,.82);
+          --qvf-bg: #2C2C2E;
           --qvf-separator: rgba(255,255,255,.16);
         }
       }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.3
+// @version      1.6.6
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
@@ -198,7 +198,7 @@
     style.textContent = `
       #${TOOLBAR_ID} {
         --qft-text: rgba(28,28,30,.82);
-        --qft-bg: rgba(242,242,247,.92);
+        --qft-bg: #F2F2F7;
         --qft-separator: rgba(60,60,67,.16);
         box-sizing: border-box;
         position: fixed;
@@ -214,8 +214,6 @@
         border: 0;
         border-radius: 999px;
         box-shadow: inset 0 0 0 .5px var(--qft-separator);
-        backdrop-filter: blur(10px) saturate(140%);
-        -webkit-backdrop-filter: blur(10px) saturate(140%);
         overflow: hidden;
         user-select: none;
         touch-action: none;
@@ -223,11 +221,11 @@
       #${TOOLBAR_ID}[data-connected-left="true"] { border-radius: 0 999px 999px 0; box-shadow: inset -.5px 0 0 var(--qft-separator), inset 0 .5px 0 var(--qft-separator), inset 0 -.5px 0 var(--qft-separator); }
       #${TOOLBAR_ID}[data-connected-right="true"] { border-radius: 999px 0 0 999px; box-shadow: inset .5px 0 0 var(--qft-separator), inset 0 .5px 0 var(--qft-separator), inset 0 -.5px 0 var(--qft-separator); }
       #${TOOLBAR_ID}[data-connected-left="true"][data-connected-right="true"] { border-radius: 0; box-shadow: inset 0 .5px 0 var(--qft-separator), inset 0 -.5px 0 var(--qft-separator); }
-      #${TOOLBAR_ID}[data-connected-left="true"]::before { content: ""; position: absolute; z-index: 2; left: 0; top: 50%; width: 1px; height: 16px; background: var(--qft-separator); transform: translateY(-50%); pointer-events: none; }
+      #${TOOLBAR_ID}[data-connected-left="true"]::before { content: ""; position: absolute; z-index: 2; left: 0; top: 7px; bottom: 7px; width: 1px; background: var(--qft-separator); pointer-events: none; }
       @media (prefers-color-scheme: dark) {
         #${TOOLBAR_ID} {
           --qft-text: rgba(255,255,255,.94);
-          --qft-bg: rgba(44,44,46,.82);
+          --qft-bg: #2C2C2E;
           --qft-separator: rgba(255,255,255,.16);
         }
       }

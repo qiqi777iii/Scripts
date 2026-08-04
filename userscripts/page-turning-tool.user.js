@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.5
+// @version      1.2.8
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并在悬浮工具栏右侧显示独立翻页按钮。
@@ -1618,7 +1618,7 @@
     style.textContent = `
       #${SCRIPT_ID} {
         --qpn-text: rgba(28,28,30,.82);
-        --qpn-bg: rgba(242,242,247,.92);
+        --qpn-bg: #F2F2F7;
         --qpn-separator: rgba(60,60,67,.16);
         box-sizing: border-box;
         position: fixed;
@@ -1635,8 +1635,6 @@
         border: 0;
         border-radius: 999px;
         box-shadow: inset 0 0 0 .5px var(--qpn-separator);
-        -webkit-backdrop-filter: blur(10px) saturate(140%);
-        backdrop-filter: blur(10px) saturate(140%);
         user-select: none;
         -webkit-user-select: none;
         touch-action: manipulation;
@@ -1645,7 +1643,7 @@
       #${SCRIPT_ID}[data-connected-left="true"] { border-radius: 0 999px 999px 0; box-shadow: inset -.5px 0 0 var(--qpn-separator), inset 0 .5px 0 var(--qpn-separator), inset 0 -.5px 0 var(--qpn-separator); }
       #${SCRIPT_ID}[data-connected-right="true"] { border-radius: 999px 0 0 999px; box-shadow: inset .5px 0 0 var(--qpn-separator), inset 0 .5px 0 var(--qpn-separator), inset 0 -.5px 0 var(--qpn-separator); }
       #${SCRIPT_ID}[data-connected-left="true"][data-connected-right="true"] { border-radius: 0; box-shadow: inset 0 .5px 0 var(--qpn-separator), inset 0 -.5px 0 var(--qpn-separator); }
-      #${SCRIPT_ID}[data-connected-left="true"]::before { content: ""; position: absolute; z-index: 2; left: 0; top: 50%; width: 1px; height: 16px; background: var(--qpn-separator); transform: translateY(-50%); pointer-events: none; }
+      #${SCRIPT_ID}[data-connected-left="true"]::before { content: ""; position: absolute; z-index: 2; left: 0; top: 7px; bottom: 7px; width: 1px; background: var(--qpn-separator); pointer-events: none; }
       #${SCRIPT_ID} button {
         box-sizing: border-box;
         position: relative;
@@ -1679,7 +1677,7 @@
       @media (prefers-color-scheme: dark) {
         #${SCRIPT_ID} {
           --qpn-text: rgba(255,255,255,.94);
-          --qpn-bg: rgba(44,44,46,.82);
+          --qpn-bg: #2C2C2E;
           --qpn-separator: rgba(255,255,255,.16);
         }
       }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.3.1
+// @version 2.3.7
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -420,11 +420,10 @@
     style.id = "tab-save-style"
     style.textContent = `
 #${WRAP_ID}{position:fixed;left:0;top:0;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top;}
-#${BUTTON_ID}{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:rgba(242,242,247,.92);color:rgba(28,28,30,.82);-webkit-backdrop-filter:blur(10px) saturate(140%);backdrop-filter:blur(10px) saturate(140%);border:0;box-shadow:inset 0 0 0 .5px var(--combined-separator);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,background .2s,color .2s,box-shadow .2s,border-radius .12s ease;}
+#${BUTTON_ID}{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:#F2F2F7;color:rgba(28,28,30,.82);border:0;box-shadow:inset 0 0 0 .5px var(--combined-separator);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,border-radius .12s ease;}
 #${BUTTON_ID}[data-connected-right="true"]{border-radius:999px 0 0 999px;box-shadow:inset .5px 0 0 var(--combined-separator),inset 0 .5px 0 var(--combined-separator),inset 0 -.5px 0 var(--combined-separator);}
-#${BUTTON_ID}[data-connected-right="true"]::after{content:"";position:absolute;z-index:2;right:1px;top:50%;width:1px;height:16px;background:var(--combined-separator);transform:translateY(-50%);pointer-events:none;}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
-#${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:rgba(229,229,234,.96);}
+#${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:#E5E5EA;}
 #${TOAST_ID}{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.76);color:white;font:14px/18px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .2s;pointer-events:none;}
 #${DIALOG_ID}{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.34);font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#111;}
 #${DIALOG_ID} .qts-dialog-card{width:min(360px,calc(100vw - 32px));max-height:calc(100vh - 32px);display:flex;flex-direction:column;padding:24px 20px 18px;border-radius:24px;background:rgba(248,248,248,.96);-webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);box-shadow:0 20px 60px rgba(0,0,0,.28);}
@@ -460,7 +459,7 @@
 #${DIALOG_ID} .qts-dialog-cancel{background:#E5E5EA;color:#111;}
 #${DIALOG_ID} .qts-dialog-save{background:#7C4DFF;color:#fff;}
 #${DIALOG_ID} button:disabled{opacity:.55;}
-@media (prefers-color-scheme:dark){#${BUTTON_ID}{--combined-separator:rgba(255,255,255,.16);background:rgba(44,44,46,.82);color:rgba(255,255,255,.94);}#${BUTTON_ID}[data-saved="true"]{color:#30D158;}#${DIALOG_ID}{color:#fff;}#${DIALOG_ID} .qts-dialog-card{background:rgba(28,28,30,.96);}#${DIALOG_ID} .qts-dialog-cancel,#${DIALOG_ID} .qts-dialog-group,#${DIALOG_ID} .qts-dialog-new-group{background:#3A3A3C;color:#fff;}#${DIALOG_ID} input[type="radio"]:checked{background-color:#1C1C1E!important;}}
+@media (prefers-color-scheme:dark){#${BUTTON_ID}{--combined-separator:rgba(255,255,255,.16);background:#2C2C2E;color:rgba(255,255,255,.94);}#${BUTTON_ID}:active{background:#3A3A3C;}#${BUTTON_ID}[data-saved="true"]{color:#30D158;}#${DIALOG_ID}{color:#fff;}#${DIALOG_ID} .qts-dialog-card{background:rgba(28,28,30,.96);}#${DIALOG_ID} .qts-dialog-cancel,#${DIALOG_ID} .qts-dialog-group,#${DIALOG_ID} .qts-dialog-new-group{background:#3A3A3C;color:#fff;}#${DIALOG_ID} input[type="radio"]:checked{background-color:#1C1C1E!important;}}
 `
     styleElement = style
     ;(document.head || document.documentElement).appendChild(style)
@@ -730,6 +729,7 @@
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) requestRefresh(REFRESH_FULL)
     })
+    try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => requestRefresh(REFRESH_LAYOUT)) } catch (_) {}
   }
 
   function ensureButtonHealthy() {
