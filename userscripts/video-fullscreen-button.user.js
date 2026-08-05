@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频全屏按钮
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.7
+// @version      1.2.9
 // @description  检测网页视频，点击按钮后自动播放并切换为全屏。
 // @author       Scripting Agent
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js
@@ -35,7 +35,7 @@
   const COVER_PREVIEW_ACTIVE_CLASS = "__mobile_preview_active__";
   const COVER_PREVIEW_VIDEO_CLASS = "__mobile_preview__";
   const PREVIEW_CONTAINER_SELECTOR = 'a[href], [class*="preview" i], [class*="thumb" i], [class*="card" i], [class*="related" i], [class*="recommend" i]';
-  const ITEM_SIZE = 35;
+  const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
   const CONNECT_OVERLAP = 1;
   const DEFAULT_RIGHT_GAP = 86;
   const DEFAULT_BOTTOM_GAP = 28;

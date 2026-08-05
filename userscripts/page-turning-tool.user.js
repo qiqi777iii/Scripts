@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.8
+// @version      1.3.2
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并在悬浮工具栏右侧显示独立翻页按钮。
@@ -29,7 +29,7 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const BASE_TOOLBAR_ID = "universal-pagination-floating-menu";
   const VIDEO_FULLSCREEN_ID = "video-fullscreen";
-  const ITEM_SIZE = 35;
+  const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
   const CONNECT_OVERLAP = 1;
   const WIDTH = ITEM_SIZE * 2;
   const DEFAULT_RIGHT_GAP = 16;
@@ -66,10 +66,35 @@
     pendingRefreshFlags: 0,
     refreshScheduled: false,
     contentDelay: Infinity,
+    domEpoch: 0,
+    pagerCache: null,
+    candidateEpoch: -1,
+    mutationScanAt: 0,
+    mutationCatchupTimer: null,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+  // hostname 在同一个文档内不会变化，站点判定结果只算一次，避免每轮刷新重复跑十几次正则。
+  const HOST_MATCH_CACHE = new Map();
+  function hostIs(pattern) {
+    let matched = HOST_MATCH_CACHE.get(pattern);
+    if (matched === undefined) {
+      matched = pattern.test(location.hostname);
+      HOST_MATCH_CACHE.set(pattern, matched);
+    }
+    return matched;
+  }
+  const HOST_XVIDEOS = /(^|\.)xvideos\.com$/i;
+  const HOST_JABLE = /(^|\.)jable\.tv$/i;
+  const HOST_OHENTAI = /(^|\.)ohentai\.org$/i;
+  const HOST_RULE34 = /(^|\.)rule34video\.com$/i;
+  const HOST_MISSAV = /(^|\.)missav\.[a-z0-9-]+$/i;
+  const HOST_EPORNER = /(^|\.)eporner\.com$/i;
+  const HOST_FUTAPO2 = /(^|\.)futapo2\.com$/i;
+  const HOST_NODESEEK = /(^|\.)nodeseek\.com$/i;
+  const HOST_WHOSTV = /(^|\.)whos\.tv$/i;
 
   function log(...args) {
     try {
@@ -123,6 +148,8 @@
   }
 
   const PAGINATION_CONTAINER_SELECTOR = '.pagination, .pager, .pages, .page-list, .pagebar, .page-numbers, [class*="pagination" i], [class*="pager" i], [class*="page-list" i], [class*="pagebar" i], [class*="pages" i], [id*="pagination" i], [id*="pager" i], [role="navigation"][aria-label*="page" i], [role="navigation"][aria-label*="分页"], [aria-label="pagination" i], [aria-label*="page navigation" i]';
+  // 播放器 / 轮播 / 推荐区：这些区域的 next/prev 按钮与翻页无关。
+  const MEDIA_CONTEXT_SELECTOR = 'video, .swiper, .carousel, .slider, .slick, .glide, [class*="swiper" i], [class*="carousel" i], [class*="slider" i], [class*="player" i], [class*="recommend" i], [class*="related" i]';
 
   function paginationContainer(el) {
     return el?.closest?.(PAGINATION_CONTAINER_SELECTOR) || null;
@@ -140,12 +167,15 @@
     );
   }
 
-  function scoreCandidate(el, direction) {
-    if (isOwnUiElement(el) || !visible(el) || disabled(el) || deniedPaginationCandidate(el)) return -999;
-    const text = normalizeText(el).toLowerCase();
-    const href = (el.getAttribute("href") || "").toLowerCase();
+  function scoreCandidate(el, direction, context = null) {
+    if (isOwnUiElement(el) || !visible(el) || disabled(el)) return -999;
+    const inPagination = context ? context.inPagination : Boolean(paginationContainer(el));
+    // 付费/登录/下载黑名单只对分页容器外的候选生效，
+    // 否则会连带否掉分页区内含 "preview"、"订阅" 字样的正常页码链接。
+    if (!inPagination && deniedPaginationCandidate(el)) return -999;
+    const text = context ? context.text : normalizeText(el).toLowerCase();
+    const href = context ? context.href : (el.getAttribute("href") || "").toLowerCase();
     const all = `${text} ${href}`;
-    const inPagination = Boolean(paginationContainer(el));
     let score = 0;
 
     if (direction === "next") {
@@ -164,6 +194,9 @@
     if (el.tagName === "BUTTON") score += 12;
     if (inPagination) score += 35;
     if (/comment|reply|share|广告|ad-|banner/.test(all)) score -= 40;
+    // 播放器、轮播、推荐区的 next/prev 按钮（如 next-video、swiper-button-next）
+    // 不是翻页，只有在分页容器外才罚分。
+    if (!inPagination && (context ? context.inMedia : Boolean(el.closest?.(MEDIA_CONTEXT_SELECTOR)))) score -= 70;
     return score;
   }
 
@@ -268,13 +301,40 @@
     return best;
   }
 
+  // 数字分页快照缓存：只要 DOM 纪元与 URL 未变，就复用上次结果，
+  // 避免 updateToolbar 与点击时重复全页建页码映射。
+  function detectNumericPagerCached() {
+    const cache = STATE.pagerCache;
+    if (
+      cache &&
+      cache.epoch === STATE.domEpoch &&
+      cache.href === location.href &&
+      (!cache.value || (cache.value.root?.isConnected &&
+        (!cache.value.prev || cache.value.prev.isConnected) &&
+        (!cache.value.next || cache.value.next.isConnected)))
+    ) {
+      return cache.value;
+    }
+    const value = safeCall("数字分页识别失败", detectNumericPager, null);
+    STATE.pagerCache = { epoch: STATE.domEpoch, href: location.href, value };
+    return value;
+  }
+
+  function invalidatePagerCache() {
+    STATE.domEpoch++;
+    STATE.pagerCache = null;
+  }
+
   function observePagerRoot(root) {
     if (STATE.observedPagerRoot === root) return;
     STATE.pagerObserver?.disconnect();
     STATE.pagerObserver = null;
     STATE.observedPagerRoot = root || null;
     if (!root?.isConnected) return;
-    STATE.pagerObserver = new MutationObserver(() => requestRefresh(REFRESH_CONTENT, 120));
+    STATE.pagerObserver = new MutationObserver(() => {
+      invalidatePagerCache();
+      requestRefresh(REFRESH_CONTENT, 120);
+    });
     STATE.pagerObserver.observe(root, {
       subtree: true,
       childList: true,
@@ -298,7 +358,63 @@
     }
   }
 
-  function findCandidate(direction, numericPager = null) {
+  // 通用候选扫描：一次遍历同时算出 prev / next，避免两个方向各扫一遍全页 DOM。
+  // 先只在分页容器内找，未命中时才降级到全页。
+  const GENERIC_SELECTOR = [
+    "a[href]",
+    "button",
+    "input[type=button]",
+    "[role=button]",
+    "[data-page]",
+    ".next",
+    ".prev",
+    ".previous",
+    "[class*=next]",
+    "[class*=prev]",
+    "[aria-label]",
+    "[aria-labelledby]",
+    "[title]",
+  ].join(",");
+  const GENERIC_SCORE_FLOOR = 30; // 低于该分数认为误判风险较高
+
+  function scanGenericCandidates(elements, inPagination) {
+    const result = { prev: null, next: null, prevScore: GENERIC_SCORE_FLOOR, nextScore: GENERIC_SCORE_FLOOR };
+    for (const el of elements) {
+      if (isOwnUiElement(el)) continue;
+      const context = safeCall("候选上下文计算失败", () => ({
+        inPagination: inPagination || Boolean(paginationContainer(el)),
+        text: normalizeText(el).toLowerCase(),
+        href: (el.getAttribute("href") || "").toLowerCase(),
+        inMedia: Boolean(el.closest?.(MEDIA_CONTEXT_SELECTOR)),
+      }), null);
+      if (!context) continue;
+      const prevScore = safeCall("候选元素评分失败", () => scoreCandidate(el, "prev", context), -999);
+      if (prevScore > result.prevScore) {
+        result.prev = el;
+        result.prevScore = prevScore;
+      }
+      const nextScore = safeCall("候选元素评分失败", () => scoreCandidate(el, "next", context), -999);
+      if (nextScore > result.nextScore) {
+        result.next = el;
+        result.nextScore = nextScore;
+      }
+    }
+    return result;
+  }
+
+  function findGenericCandidates() {
+    const paginationRoots = $$(PAGINATION_CONTAINER_SELECTOR).filter((root) => !isOwnUiElement(root));
+    if (paginationRoots.length) {
+      const scoped = scanGenericCandidates(
+        uniqueElements(paginationRoots.flatMap((root) => $$(GENERIC_SELECTOR, root))),
+        true
+      );
+      if (scoped.prev || scoped.next) return scoped;
+    }
+    return scanGenericCandidates(uniqueElements($$(GENERIC_SELECTOR)), false);
+  }
+
+  function findCandidate(direction, numericPager = null, generic = null) {
     if (isMissAv()) {
       return safeCall(`MissAV ${direction} 识别失败`, () => findMissAvCandidate(direction), null);
     }
@@ -349,42 +465,21 @@
     }
 
     const byRel = safeCall(`rel ${direction} 识别失败`, () => findByRel(direction), null);
-    if (byRel && byRel.href && !disabled(byRel) && !deniedPaginationCandidate(byRel)) return byRel;
+    if (byRel && byRel.href && !disabled(byRel) && (paginationContainer(byRel) || !deniedPaginationCandidate(byRel))) return byRel;
 
     if (numericPager?.[direction]) return numericPager[direction];
 
-    const selectors = [
-      "a[href]",
-      "button",
-      "input[type=button]",
-      "[role=button]",
-      "[data-page]",
-      ".next",
-      ".prev",
-      ".previous",
-      ".pagination a",
-      ".pagination button",
-      ".pager a",
-      ".pager button",
-      "[class*=next]",
-      "[class*=prev]",
-      "[aria-label]",
-      "[aria-labelledby]",
-      "[title]",
-    ];
+    const scan = generic || safeCall("通用候选扫描失败", findGenericCandidates, null);
+    return scan?.[direction] || null;
+  }
 
-    const candidates = uniqueElements($$(selectors.join(",")))
-      .filter((el) => !isOwnUiElement(el));
-    let best = null;
-    let bestScore = 30; // 低于该分数认为误判风险较高
-    for (const el of candidates) {
-      const s = safeCall("候选元素评分失败", () => scoreCandidate(el, direction), -999);
-      if (s > bestScore) {
-        best = el;
-        bestScore = s;
-      }
-    }
-    return best;
+  // 一次性算出两个方向的候选，通用扫描只跑一遍。
+  function findBothCandidates(numericPager) {
+    const generic = safeCall("通用候选扫描失败", findGenericCandidates, null);
+    return {
+      prev: safeCall("上一页识别失败", () => findCandidate("prev", numericPager, generic), null),
+      next: safeCall("下一页识别失败", () => findCandidate("next", numericPager, generic), null),
+    };
   }
 
   function pageFromUrl(urlLike = location.href) {
@@ -422,13 +517,16 @@
       if (xvideosPathPage) return xvideosPathPage;
     }
 
-    const pathMatch = url.pathname.match(/(?:page|p|pg|list)[/-]?(\d+)(?:\/|$|\.html?$)/i);
+    // 通用路径页码：要求 page/pg/list 关键字，或 `p` 后带明确分隔符且位数不超过 4，
+    // 避免把 /p/1234567 这类文章 ID 误判成页码。
+    const pathMatch = url.pathname.match(/(?:page|pg|list)[/_-]?(\d{1,5})(?:\/|$|\.html?$)/i) ||
+      url.pathname.match(/\bp[/_-](\d{1,4})(?:\/|$|\.html?$)/i);
     if (pathMatch) return String(parseInt(pathMatch[1], 10));
     return "";
   }
 
   function isXVideos() {
-    return /(^|\.)xvideos\.com$/i.test(location.hostname);
+    return hostIs(HOST_XVIDEOS);
   }
 
   function isXVideosNewListPage(urlLike = location.href) {
@@ -507,7 +605,7 @@
   }
 
   function isJable() {
-    return /(^|\.)jable\.tv$/i.test(location.hostname);
+    return hostIs(HOST_JABLE);
   }
 
   function getJablePathPage(urlLike = location.href) {
@@ -554,7 +652,7 @@
   }
 
   function isOHentai() {
-    return /(^|\.)ohentai\.org$/i.test(location.hostname);
+    return hostIs(HOST_OHENTAI);
   }
 
   function findOHentaiCandidate(direction) {
@@ -677,7 +775,7 @@
     }
 
     // 其他 XVideos 分类/搜索页仍保留旧 tab 分页，但必须有真实分页证据，不能在详情页盲造地址。
-    const pager = detectNumericPager();
+    const pager = detectNumericPagerCached();
     if (pager?.[direction]) return pager[direction];
     const current = parseInt(pageFromUrl() || pager?.currentPage || "", 10);
     if (!Number.isFinite(current) || current < 1) return null;
@@ -688,7 +786,7 @@
   }
 
   function isRule34Video() {
-    return /(^|\.)rule34video\.com$/i.test(location.hostname);
+    return hostIs(HOST_RULE34);
   }
 
   function rule34PageFromDataParameters(el) {
@@ -764,15 +862,15 @@
   }
 
   function isMissAv() {
-    return /(^|\.)missav\.[a-z0-9-]+$/i.test(location.hostname);
+    return hostIs(HOST_MISSAV);
   }
 
   function isEporner() {
-    return /(^|\.)eporner\.com$/i.test(location.hostname);
+    return hostIs(HOST_EPORNER);
   }
 
   function isFutapo2() {
-    return /(^|\.)futapo2\.com$/i.test(location.hostname);
+    return hostIs(HOST_FUTAPO2);
   }
 
   function isFutapo2SingleCollectionPage() {
@@ -1358,10 +1456,14 @@
 
   function navigateDirection(direction) {
     if (STATE.navigating) return;
-    // 点击时重新生成数字分页快照并传给统一候选识别，避免无 class 数字分页丢失，
+    // 点击时重新确认数字分页快照并传给统一候选识别，避免无 class 数字分页丢失，
     // 也避免通用评分把分页区中的任意数字链接错当成相邻页。
-    const numericPager = safeCall("点击前数字分页识别失败", detectNumericPager, null);
-    const candidate = safeCall(`${direction} 点击前识别失败`, () => findCandidate(direction, numericPager), null);
+    // 快照仍然有效时直接复用，不重复扫描全页。
+    const numericPager = detectNumericPagerCached();
+    const cached = STATE.candidateEpoch === STATE.domEpoch ? STATE[direction] : null;
+    const candidate = (cached instanceof Element && cached.isConnected)
+      ? cached
+      : safeCall(`${direction} 点击前识别失败`, () => findCandidate(direction, numericPager), null);
     STATE.numericPager = numericPager;
     STATE[direction] = candidate;
     if (candidate) {
@@ -1375,10 +1477,12 @@
     if (!el || STATE.navigating) return;
     if (el.__paginationElement) return clickOrNavigate(el.__paginationElement);
     if (el.__paginationUrl) return hardNavigate(el.__paginationUrl);
-    if (!(el instanceof Element) || isOwnUiElement(el) || deniedPaginationCandidate(el)) return;
+    // 与识别阶段一致：付费/登录/下载黑名单只对分页容器外的元素生效。
+    const blocked = (target) => Boolean(target) && !paginationContainer(target) && deniedPaginationCandidate(target);
+    if (!(el instanceof Element) || isOwnUiElement(el) || blocked(el)) return;
     const link = el.tagName === "A" || el.tagName === "LINK" ? el : el.closest("a[href]");
     const clickTarget = link || el;
-    if (!(clickTarget instanceof HTMLElement) || (link && deniedPaginationCandidate(link))) return;
+    if (!(clickTarget instanceof HTMLElement) || blocked(link)) return;
     let targetUrl = "";
     try { targetUrl = link?.href ? new URL(link.href, location.href).href : ""; } catch (_) {}
     const canFallback = Boolean(targetUrl && /^https?:/i.test(targetUrl) && (!link.target || link.target.toLowerCase() === "_self"));
@@ -1389,8 +1493,26 @@
     }
     const startUrl = location.href;
     const targetContext = paginationContainer(link) || link.parentElement;
-    let targetChanged = false;
-    const observer = targetContext ? new MutationObserver(() => { targetChanged = true; }) : null;
+    let settled = false;
+    let timeoutTimer = null;
+    let pollTimer = null;
+    const finish = (fallback) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearInterval(pollTimer);
+      observer?.disconnect();
+      STATE.navigating = false;
+      if (fallback) {
+        hardNavigate(targetUrl);
+        return;
+      }
+      invalidatePagerCache();
+      scheduleEventUpdate();
+    };
+    // 只要分页区 DOM 或 URL 已发生变化就立即收尾，不再硬等满 800ms；
+    // 两者都没动静时才在超时后回退到硬跳转。
+    const observer = targetContext ? new MutationObserver(() => finish(false)) : null;
     observer?.observe(targetContext, { subtree: true, childList: true, characterData: true, attributes: true });
     STATE.navigating = true;
     try { HTMLElement.prototype.click.call(clickTarget); }
@@ -1400,20 +1522,16 @@
       log("原生点击分页元素失败", error);
       return;
     }
-    setTimeout(() => {
-      observer?.disconnect();
-      if (location.href === startUrl && !targetChanged && link.isConnected && canFallback) {
-        STATE.navigating = false;
-        hardNavigate(targetUrl);
-      } else {
-        STATE.navigating = false;
-        scheduleEventUpdate();
-      }
+    pollTimer = setInterval(() => {
+      if (location.href !== startUrl || !link.isConnected) finish(false);
+    }, 60);
+    timeoutTimer = setTimeout(() => {
+      finish(location.href === startUrl && link.isConnected && canFallback);
     }, 800);
   }
 
   function isNodeSeek() {
-    return /(^|\.)nodeseek\.com$/i.test(location.hostname);
+    return hostIs(HOST_NODESEEK);
   }
 
   function getNodeSeekCurrentPage() {
@@ -1479,7 +1597,7 @@
   }
 
   function isWhosTv() {
-    return /(^|\.)whos\.tv$/i.test(location.hostname);
+    return hostIs(HOST_WHOSTV);
   }
 
   function isWhosTvFramesListPage() {
@@ -1779,11 +1897,13 @@
     }
     STATE.updateInFlight = true;
     try {
-      const numericPager = safeCall("数字分页识别失败", detectNumericPager, null);
+      const numericPager = detectNumericPagerCached();
       STATE.numericPager = numericPager;
       observePagerRoot(numericPager?.root || null);
-      STATE.prev = safeCall("上一页识别失败", () => findCandidate("prev", numericPager), null);
-      STATE.next = safeCall("下一页识别失败", () => findCandidate("next", numericPager), null);
+      const candidates = findBothCandidates(numericPager);
+      STATE.prev = candidates.prev;
+      STATE.next = candidates.next;
+      STATE.candidateEpoch = STATE.domEpoch;
       const box = ensureToolbar();
       if (!box) return;
       box.querySelector(".prev").disabled = !STATE.prev;
@@ -1997,6 +2117,7 @@
 
   function recoverRefresh() {
     STATE.refreshRetryCount = 0;
+    invalidatePagerCache();
     requestRefresh(REFRESH_FULL, 0);
   }
 
@@ -2006,6 +2127,7 @@
     window.addEventListener(SHARED_URL_CHANGE_EVENT, () => {
       STATE.navigating = false;
       STATE.hydrationRetried = false;
+      invalidatePagerCache();
       clearTimeout(STATE.hydrationTimer);
       STATE.hydrationTimer = null;
       scheduleEventUpdate();
@@ -2029,7 +2151,28 @@
     STATE.observer = new MutationObserver((mutations) => {
       const currentBox = document.getElementById(SCRIPT_ID);
       const toolbarBroken = !currentBox || currentBox !== STATE.toolbar || currentBox.querySelector(".prev") !== STATE.prevButton || currentBox.querySelector(".next") !== STATE.nextButton;
-      if (toolbarBroken || document.getElementById(STYLE_ID) !== STATE.styleElement || !STATE.styleElement?.isConnected || mutations.some(mutationTouchesRelevantUi)) {
+      if (toolbarBroken || document.getElementById(STYLE_ID) !== STATE.styleElement || !STATE.styleElement?.isConnected) {
+        invalidatePagerCache();
+        requestRefresh(REFRESH_FULL, 120);
+        return;
+      }
+      // 无限滚动站点会持续产生大量 mutation，同一节流窗口内只做一次深度判定；
+      // 被节流掉的批次不丢弃，改用一次延迟补扫兼顾准确性。
+      const now = Date.now();
+      if (now - STATE.mutationScanAt < 200) {
+        if (!STATE.mutationCatchupTimer) {
+          STATE.mutationCatchupTimer = setTimeout(() => {
+            STATE.mutationCatchupTimer = null;
+            STATE.mutationScanAt = Date.now();
+            invalidatePagerCache();
+            requestRefresh(REFRESH_CONTENT, 0);
+          }, 260);
+        }
+        return;
+      }
+      STATE.mutationScanAt = now;
+      if (mutations.some(mutationTouchesRelevantUi)) {
+        invalidatePagerCache();
         requestRefresh(REFRESH_FULL, 120);
       }
     });
