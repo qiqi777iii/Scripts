@@ -86,6 +86,20 @@ async function loadStoreFromFile(file: string, strict = false): Promise<Store | 
   }
 }
 
+/**
+ * 文件指纹（修改时间 + 字节数）。用于在页面回返时判断收藏库是否真的变过，
+ * 避免每次 onAppear 都全量读取并解析 JSON。
+ */
+export async function storeFingerprint(): Promise<string | null> {
+  try {
+    const info = await FileManager.stat(FILE)
+    if (!info || info.type === "notFound") return null
+    return `${info.modificationDate}:${info.size}`
+  } catch {
+    return null
+  }
+}
+
 export async function loadStore(): Promise<Store> {
   const current = await loadStoreFromFile(FILE, true)
   if (current) return current
@@ -140,6 +154,36 @@ async function releaseStoreLock(lock: { ownerFile: string }): Promise<void> {
   try { await FileManager.remove(lock.ownerFile) } catch {}
 }
 
+/**
+ * 清理异常退出遗留的锁持有者文件。它们不影响正确性，但会在 Safari 数据目录
+ * 里无限累积，拖慢后续每一次目录读取。只在启动时做一次，失败不影响主流程。
+ */
+export async function cleanupStaleLockFiles(): Promise<number> {
+  try {
+    const dir = FileManager.safariBrowserDirectory
+    const entries = await FileManager.readDirectory(dir)
+    const prefix = "tabs-saver-store.json.lock-owner-"
+    const cutoff = Date.now() - LOCK_STALE_MS * 5
+    let removed = 0
+    for (const entry of entries) {
+      const name = typeof entry === "string" ? entry : (entry as any)?.name
+      if (typeof name !== "string" || !name.startsWith(prefix)) continue
+      const path = `${dir}/${name}`
+      try {
+        const info = await FileManager.stat(path)
+        if (info && info.type !== "notFound" && info.modificationDate > cutoff) continue
+      } catch {}
+      try {
+        await FileManager.remove(path)
+        removed += 1
+      } catch {}
+    }
+    return removed
+  } catch {
+    return 0
+  }
+}
+
 export async function saveStore(store: Store): Promise<void> {
   const lock = await acquireStoreLock()
   try {
@@ -149,9 +193,15 @@ export async function saveStore(store: Store): Promise<void> {
     }
     store.updatedAt = Date.now()
     store._revision = nextRevision()
-    await FileManager.writeAsString(FILE, JSON.stringify(store))
-    const verified = await loadStoreFromFile(FILE)
-    if (verified?._revision !== store._revision) throw new Error("收藏库写入验证失败，请重试")
+    // 写入已 await 完成，不再额外全量读回验证；仅在写入报错时回读确认一次。
+    try {
+      await FileManager.writeAsString(FILE, JSON.stringify(store))
+    } catch (error) {
+      const verified = await loadStoreFromFile(FILE)
+      if (verified?._revision !== store._revision) {
+        throw error instanceof Error ? error : new Error("收藏库写入失败，请重试")
+      }
+    }
   } finally {
     await releaseStoreLock(lock)
   }
@@ -226,6 +276,11 @@ export function removeGroup(store: Store, groupId: string): void {
 
 export type TrashRetentionDays = 0 | 3 | 7 | 15
 
+/**
+ * 回收站条数硬上限。回收站被每一次整库读写携带，不限制会持续放大 JSON 体积。
+ */
+export const TRASH_MAX_ITEMS = 500
+
 export function moveBookmarks(
   store: Store,
   sourceGroupId: string,
@@ -290,11 +345,17 @@ export function cleanupExpiredTrash(
   retentionDays: TrashRetentionDays,
   now = Date.now(),
 ): number {
-  if (retentionDays === 0) return 0
   const before = trashList(store).length
-  const cutoff = now - retentionDays * 24 * 60 * 60 * 1000
-  store.trash = trashList(store).filter(item => item.deletedAt >= cutoff)
-  return before - store.trash.length
+  if (retentionDays > 0) {
+    const cutoff = now - retentionDays * 24 * 60 * 60 * 1000
+    store.trash = trashList(store).filter(item => item.deletedAt >= cutoff)
+  }
+  // 即使“永久保留”也保留条数上限，防止整库 JSON 无限增长。
+  const list = trashList(store)
+  if (list.length > TRASH_MAX_ITEMS) {
+    store.trash = [...list].sort((a, b) => b.deletedAt - a.deletedAt).slice(0, TRASH_MAX_ITEMS)
+  }
+  return before - trashList(store).length
 }
 
 export function restoreTrashItem(store: Store, trashId: string): boolean {

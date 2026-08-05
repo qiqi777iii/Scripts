@@ -83,6 +83,8 @@ function decodeEntities(s: string): string {
 async function fetchTitle(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, {
+      // 分享面板不能被慢站点阻塞，超时后直接回退到原始标题。
+      timeout: 6,
       headers: {
         "User-Agent":
           "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
@@ -90,9 +92,11 @@ async function fetchTitle(url: string): Promise<string | null> {
     })
     if (!res.ok) return null
     const html = await res.text()
+    // 只在页面头部区域匹配标题，避免对整个大型 HTML 跑回溯正则。
+    const head = html.length > 65536 ? html.slice(0, 65536) : html
     const m =
-      html.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
-      html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+      head.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
+      head.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
     if (m && m[1]) {
       const t = decodeEntities(m[1].trim().replace(/\s+/g, " "))
       if (t) return t
