@@ -24,6 +24,8 @@ import {
 import {
   loadStore,
   saveStore,
+  storeFingerprint,
+  cleanupStaleLockFiles,
   sortedGroups,
   ensureDefaultGroup,
   createGroup,
@@ -75,13 +77,57 @@ import {
   type RestoreUndoMeta,
 } from "./sync"
 
+const hostCache = new Map<string, string>()
+
 function host(url: string): string {
+  const cached = hostCache.get(url)
+  if (cached !== undefined) return cached
   const m = url.match(/^[a-z]+:\/\/([^/?#]+)/i)
-  return m ? m[1] : url
+  const result = m ? m[1] : url
+  if (hostCache.size >= 1000) hostCache.clear()
+  hostCache.set(url, result)
+  return result
 }
 
+// 同一域名的图标地址只拼一次，避免每行、每次重绘都重新正则匹配与编码。
+const faviconCache = new Map<string, string>()
+
 function faviconUrl(url: string): string {
-  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host(url))}&sz=64`
+  const domain = host(url)
+  const cached = faviconCache.get(domain)
+  if (cached !== undefined) return cached
+  const result = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`
+  if (faviconCache.size >= 500) faviconCache.clear()
+  faviconCache.set(domain, result)
+  return result
+}
+
+// 取不到图标的域名记下来，后续行不再重复发起注定失败的网络请求。
+const faviconFailedHosts = new Set<string>()
+
+function FaviconImage({ url }: { url: string }) {
+  const domain = host(url)
+  const fallback = (
+    <Image
+      systemName="globe"
+      foregroundStyle="systemGray3"
+      frame={{ width: 24, height: 24 }}
+    />
+  )
+  if (faviconFailedHosts.has(domain)) return fallback
+  return (
+    <Image
+      imageUrl={faviconUrl(url)}
+      resizable
+      frame={{ width: 24, height: 24 }}
+      placeholder={fallback}
+      onError={() => {
+        if (faviconFailedHosts.size >= 500) faviconFailedHosts.clear()
+        faviconFailedHosts.add(domain)
+      }}
+      clipShape={{ type: "rect", cornerRadius: 5 }}
+    />
+  )
 }
 
 function formatTime(ts: number): string {
@@ -119,7 +165,7 @@ const TRASH_RETENTION_KEY = "tab.trashRetentionDays"
 const BROWSER_SCRIPT_NAME = "tabs-saver-button.user.js"
 const GUIDE_SHOWN_KEY = "tab.guideShown"
 const SHOW_FAVORITES_KEY = "tab.showFavorites"
-const APP_VERSION = "2.3.2"
+const APP_VERSION = "2.3.3"
 const CHANGELOG_SEEN_KEY = "tab.changelogSeenVersion"
 type ChangelogEntry = {
   version: string
@@ -128,6 +174,20 @@ type ChangelogEntry = {
   items: string[]
 }
 const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  {
+    version: "2.3.3",
+    date: "2026-08-04",
+    summary: "性能优化",
+    items: [
+      "列表页回返时先比对收藏库文件指纹，数据没变就不再全量读取和重建分节。",
+      "保存不再额外回读验证整库，删除和移动的写入次数明显减少。",
+      "多选状态改用集合，全选大列表时不再逐行线性查找。",
+      "回收站增加条数上限，并在启动时清理遗留锁文件，避免数据体积持续膨胀。",
+      "图标地址按域名缓存，取不到的域名不再重复发起网络请求。",
+      "分享保存抓取标题增加超时，慢站点不会再卡住分享面板。",
+      "Safari 收藏按钮取消无效的滚动监听与常驻合成层，并缩小 DOM 监听范围。",
+    ],
+  },
   {
     version: "2.3.2",
     date: "2026-08-01",
@@ -400,8 +460,15 @@ export default function TabsManagerView({
   const [sortList, setSortList] = useState<Group[]>([])
   const [syncMeta, setSyncMeta] = useState<SyncMeta>(() => getSyncMeta())
   const [syncing, setSyncing] = useState(false)
+  const lastFingerprint = useObservable<string | null>(null)
 
-  async function reload() {
+  async function reload(force = false) {
+    // 从子页面返回时，文件未变就不重新读取解析整库。
+    const fingerprint = await storeFingerprint()
+    if (!force && !loading && fingerprint != null && fingerprint === lastFingerprint.value) {
+      setSyncMeta(getSyncMeta())
+      return
+    }
     const s = await loadStore()
     let dirty = normalizeOrders(s)
     if (cleanupExpiredTrash(s, getTrashRetentionDays()) > 0) dirty = true
@@ -415,12 +482,15 @@ export default function TabsManagerView({
     }
     if (dirty) await saveStore(s)
     setStore({ ...s })
+    lastFingerprint.setValue(await storeFingerprint())
     setSyncMeta(getSyncMeta())
     setLoading(false)
   }
 
   useEffect(() => {
     ;(async () => {
+      // 异常退出遗留的锁文件会在 Safari 数据目录里累积，启动时清一次。
+      void cleanupStaleLockFiles()
       if (homeScreen) {
         await reload()
         return
@@ -463,6 +533,7 @@ export default function TabsManagerView({
 
   async function persist() {
     await saveStore(store)
+    lastFingerprint.setValue(await storeFingerprint())
     setStore({ ...store })
   }
 
@@ -487,6 +558,7 @@ export default function TabsManagerView({
     setSortList(remaining)
     applyGroupOrder(store, remaining.map(g => g.id))
     await saveStore(store)
+    lastFingerprint.setValue(await storeFingerprint())
     setStore({ ...store })
   }
 
@@ -531,6 +603,7 @@ export default function TabsManagerView({
     moveGroupToTrash(store, g.id)
     setStore({ ...store })
     await saveStore(store)
+    lastFingerprint.setValue(await storeFingerprint())
   }
 
   async function handleWebDAVPushResult(r: PushResult): Promise<boolean> {
@@ -570,7 +643,7 @@ export default function TabsManagerView({
       element: <VersionHistoryView />,
       modalPresentationStyle: "pageSheet",
     })
-    await reload()
+    await reload(true)
     setSyncMeta(getSyncMeta())
   }
 
@@ -624,7 +697,7 @@ export default function TabsManagerView({
                     element: <TrashView />,
                     modalPresentationStyle: "pageSheet",
                   })
-                  await reload()
+                  await reload(true)
                 }}
               />
               <Menu title={`WebDAV · ${webDAVStatusLabel()}`} systemImage="externaldrive.connected.to.line.below">
@@ -1286,20 +1359,29 @@ function GroupView({ groupId }: { groupId: string }) {
   const [store, setStore] = useState<Store>({ version: 1, groups: [] })
   const [loaded, setLoaded] = useState(false)
   const [selecting, setSelecting] = useState(false)
-  const [selected, setSelected] = useState<string[]>([])
-  const [listRevision, setListRevision] = useState(0)
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const sections = useObservable<DaySection[]>([])
+  const lastFingerprint = useObservable<string | null>(null)
 
   function refreshSections(bookmarks: Bookmark[]) {
     sections.setValue(groupByDay(bookmarks))
   }
 
-  async function reload() {
+  async function reload(force = false) {
+    // 文件未变时直接跳过整库读取与分节重建。
+    const fingerprint = await storeFingerprint()
+    if (!force && loaded && fingerprint != null && fingerprint === lastFingerprint.value) return
     const s = await loadStore()
     const nextGroup = s.groups.find((item: Group) => item.id === groupId)
     refreshSections(nextGroup?.bookmarks ?? [])
     setStore({ ...s })
+    lastFingerprint.setValue(fingerprint)
     setLoaded(true)
+  }
+
+  // 本地写入后刷新指纹，避免下次 onAppear 误判为外部变更而全量重载。
+  async function markPersisted() {
+    lastFingerprint.setValue(await storeFingerprint())
   }
 
   const group = store.groups.find((g: Group) => g.id === groupId)
@@ -1315,8 +1397,13 @@ function GroupView({ groupId }: { groupId: string }) {
     moveBookmarksToTrash(nextStore, nextGroup, [bookmarkId])
     refreshSections(nextGroup.bookmarks)
     setStore(nextStore)
-    setSelected(selected.filter(id => id !== bookmarkId))
+    if (selected.has(bookmarkId)) {
+      const next = new Set(selected)
+      next.delete(bookmarkId)
+      setSelected(next)
+    }
     await saveStore(nextStore)
+    await markPersisted()
   }
 
   async function chooseMoveTarget(title: string): Promise<Group | null> {
@@ -1349,6 +1436,7 @@ function GroupView({ groupId }: { groupId: string }) {
     if (moveBookmark(store, group.id, bookmarkId, target.id)) {
       refreshSections(group.bookmarks)
       await saveStore(store)
+      await markPersisted()
       setStore({ ...store })
     }
   }
@@ -1371,6 +1459,7 @@ function GroupView({ groupId }: { groupId: string }) {
       refreshSections(nextStore.groups.find(item => item.id === group.id)?.bookmarks ?? [])
       setStore(nextStore)
       await saveStore(nextStore)
+      await markPersisted()
     }
     Safari.openURL(b.url)
   }
@@ -1378,6 +1467,7 @@ function GroupView({ groupId }: { groupId: string }) {
   async function onFavorite(b: Bookmark) {
     const added = addFavorite(store, b)
     await saveStore(store)
+    await markPersisted()
     setStore({ ...store })
     await Dialog.alert({
       title: added ? "已加入收藏" : "已在收藏中",
@@ -1386,48 +1476,48 @@ function GroupView({ groupId }: { groupId: string }) {
   }
 
   function toggleSelect(id: string) {
-    setSelected(
-      selected.includes(id)
-        ? selected.filter(x => x !== id)
-        : [...selected, id],
-    )
+    const next = new Set(selected)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSelected(next)
   }
 
   function enterSelect() {
-    setSelected([])
+    setSelected(new Set())
     setSelecting(true)
   }
 
   function exitSelect() {
     setSelecting(false)
-    setSelected([])
+    setSelected(new Set())
   }
 
   function selectAll() {
     if (!group) return
-    if (selected.length === group.bookmarks.length) {
-      setSelected([])
+    if (selected.size === group.bookmarks.length) {
+      setSelected(new Set())
     } else {
-      setSelected(group.bookmarks.map((b: Bookmark) => b.id))
+      setSelected(new Set(group.bookmarks.map((b: Bookmark) => b.id)))
     }
   }
 
   async function moveSelected() {
-    if (!group || selected.length === 0) return
-    const target = await chooseMoveTarget(`移动 ${selected.length} 条收藏`)
+    if (!group || selected.size === 0) return
+    const target = await chooseMoveTarget(`移动 ${selected.size} 条收藏`)
     if (!target) return
-    const moved = moveBookmarks(store, group.id, selected, target.id)
+    const moved = moveBookmarks(store, group.id, [...selected], target.id)
     if (moved === 0) return
     refreshSections(group.bookmarks)
     await saveStore(store)
+    await markPersisted()
     setStore({ ...store })
     exitSelect()
   }
 
   async function deleteSelected() {
-    if (!group || selected.length === 0) return
+    if (!group || selected.size === 0) return
     const ok = await Dialog.confirm({
-      title: `将 ${selected.length} 条收藏移到回收站？`,
+      title: `将 ${selected.size} 条收藏移到回收站？`,
       message: "可以稍后从回收站恢复。",
     })
     if (!ok) return
@@ -1437,15 +1527,15 @@ function GroupView({ groupId }: { groupId: string }) {
       groups: store.groups.map(item => item.id === group.id ? nextGroup : item),
       trash: store.trash ? [...store.trash] : undefined,
     }
-    moveBookmarksToTrash(nextStore, nextGroup, selected)
+    moveBookmarksToTrash(nextStore, nextGroup, [...selected])
     try {
       await saveStore(nextStore)
+      await markPersisted()
       refreshSections(nextGroup.bookmarks)
       setStore(nextStore)
       exitSelect()
-      setListRevision(current => current + 1)
     } catch (error) {
-      await reload()
+      await reload(true)
       await Dialog.alert({
         title: "删除失败",
         message: String(error),
@@ -1454,14 +1544,13 @@ function GroupView({ groupId }: { groupId: string }) {
   }
 
   const allSelected =
-    !!group && group.bookmarks.length > 0 && selected.length === group.bookmarks.length
+    !!group && group.bookmarks.length > 0 && selected.size === group.bookmarks.length
 
   return (
     <List
-      key={`group-bookmarks-list-${listRevision}`}
       navigationTitle={group?.name ?? "分组"}
       navigationBarTitleDisplayMode="inline"
-      onAppear={reload}
+      onAppear={() => reload()}
       safeAreaInset={
         selecting
           ? {
@@ -1505,21 +1594,21 @@ function GroupView({ groupId }: { groupId: string }) {
                           foregroundStyle="secondaryLabel"
                         />
                         <Text font="caption2" foregroundStyle="secondaryLabel">
-                          {`已选 ${selected.length}`}
+                          {`已选 ${selected.size}`}
                         </Text>
                       </VStack>
                       <Button
-                        disabled={selected.length === 0}
+                        disabled={selected.size === 0}
                         action={moveSelected}
                         frame={{ maxWidth: "infinity" }}
                       >
                         <VStack spacing={3}>
-                          <Image systemName="folder" font="title3" foregroundStyle={selected.length === 0 ? "systemGray3" : "systemBlue"} />
-                          <Text font="caption2" foregroundStyle={selected.length === 0 ? "systemGray3" : "systemBlue"}>移动</Text>
+                          <Image systemName="folder" font="title3" foregroundStyle={selected.size === 0 ? "systemGray3" : "systemBlue"} />
+                          <Text font="caption2" foregroundStyle={selected.size === 0 ? "systemGray3" : "systemBlue"}>移动</Text>
                         </VStack>
                       </Button>
                       <Button
-                        disabled={selected.length === 0}
+                        disabled={selected.size === 0}
                         action={deleteSelected}
                         frame={{ maxWidth: "infinity" }}
                       >
@@ -1528,13 +1617,13 @@ function GroupView({ groupId }: { groupId: string }) {
                             systemName="trash"
                             font="title3"
                             foregroundStyle={
-                              selected.length === 0 ? "systemGray3" : "systemRed"
+                              selected.size === 0 ? "systemGray3" : "systemRed"
                             }
                           />
                           <Text
                             font="caption2"
                             foregroundStyle={
-                              selected.length === 0 ? "systemGray3" : "systemRed"
+                              selected.size === 0 ? "systemGray3" : "systemRed"
                             }
                           >
                             删除
@@ -1592,7 +1681,7 @@ function GroupView({ groupId }: { groupId: string }) {
             }
           >
             {sec.items.map((b: Bookmark) => {
-              const isSel = selected.includes(b.id)
+              const isSel = selected.has(b.id)
               return (
                 <Button
                   key={b.id}
@@ -1658,19 +1747,7 @@ function GroupView({ groupId }: { groupId: string }) {
                         font="title3"
                       />
                     ) : null}
-                    <Image
-                      imageUrl={faviconUrl(b.url)}
-                      resizable
-                      frame={{ width: 24, height: 24 }}
-                      placeholder={
-                        <Image
-                          systemName="globe"
-                          foregroundStyle="systemGray3"
-                          frame={{ width: 24, height: 24 }}
-                        />
-                      }
-                      clipShape={{ type: "rect", cornerRadius: 5 }}
-                    />
+                    <FaviconImage url={b.url} />
                     <VStack alignment="leading" spacing={4} frame={{ maxWidth: "infinity", alignment: "leading" }}>
                       <Text
                         font="body"
@@ -1835,19 +1912,27 @@ function FavoritesView() {
   const [store, setStore] = useState<Store>({ version: 1, groups: [] })
   const [loaded, setLoaded] = useState(false)
   const [selecting, setSelecting] = useState(false)
-  const [selected, setSelected] = useState<string[]>([])
-  const [listRevision, setListRevision] = useState(0)
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const sections = useObservable<DaySection[]>([])
+  const lastFingerprint = useObservable<string | null>(null)
 
   function refreshSections(bookmarks: Bookmark[]) {
     sections.setValue(groupByDay(bookmarks))
   }
 
-  async function reload() {
+  async function reload(force = false) {
+    // 文件未变时直接跳过整库读取与分节重建。
+    const fingerprint = await storeFingerprint()
+    if (!force && loaded && fingerprint != null && fingerprint === lastFingerprint.value) return
     const s = await loadStore()
     refreshSections(getFavorites(s))
     setStore({ ...s })
+    lastFingerprint.setValue(fingerprint)
     setLoaded(true)
+  }
+
+  async function markPersisted() {
+    lastFingerprint.setValue(await storeFingerprint())
   }
 
   const favorites = getFavorites(store)
@@ -1859,8 +1944,13 @@ function FavoritesView() {
     }
     refreshSections(nextStore.favorites ?? [])
     setStore(nextStore)
-    setSelected(selected.filter(x => x !== id))
+    if (selected.has(id)) {
+      const next = new Set(selected)
+      next.delete(id)
+      setSelected(next)
+    }
     await saveStore(nextStore)
+    await markPersisted()
   }
 
   async function openBookmark(b: Bookmark) {
@@ -1874,53 +1964,53 @@ function FavoritesView() {
       refreshSections(nextStore.favorites ?? [])
       setStore(nextStore)
       await saveStore(nextStore)
+      await markPersisted()
     }
     Safari.openURL(b.url)
   }
 
   function toggleSelect(id: string) {
-    setSelected(
-      selected.includes(id)
-        ? selected.filter(x => x !== id)
-        : [...selected, id],
-    )
+    const next = new Set(selected)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSelected(next)
   }
 
   function enterSelect() {
-    setSelected([])
+    setSelected(new Set())
     setSelecting(true)
   }
 
   function exitSelect() {
     setSelecting(false)
-    setSelected([])
+    setSelected(new Set())
   }
 
   function selectAll() {
-    if (selected.length === favorites.length) setSelected([])
-    else setSelected(favorites.map((b: Bookmark) => b.id))
+    if (selected.size === favorites.length) setSelected(new Set())
+    else setSelected(new Set(favorites.map((b: Bookmark) => b.id)))
   }
 
   async function deleteSelected() {
-    if (selected.length === 0) return
+    if (selected.size === 0) return
     const ok = await Dialog.confirm({
-      title: `删除 ${selected.length} 条收藏？`,
+      title: `删除 ${selected.size} 条收藏？`,
       message: "仅从收藏移除，不影响各标签组。",
     })
     if (!ok) return
-    const selectedIds = new Set(selected)
+    const selectedIds = selected
     const nextStore: Store = {
       ...store,
       favorites: getFavorites(store).filter(bookmark => !selectedIds.has(bookmark.id)),
     }
     try {
       await saveStore(nextStore)
+      await markPersisted()
       refreshSections(nextStore.favorites ?? [])
       setStore(nextStore)
       exitSelect()
-      setListRevision(current => current + 1)
     } catch (error) {
-      await reload()
+      await reload(true)
       await Dialog.alert({
         title: "删除失败",
         message: String(error),
@@ -1929,14 +2019,13 @@ function FavoritesView() {
   }
 
   const allSelected =
-    favorites.length > 0 && selected.length === favorites.length
+    favorites.length > 0 && selected.size === favorites.length
 
   return (
     <List
-      key={`favorite-bookmarks-list-${listRevision}`}
       navigationTitle="收藏"
       navigationBarTitleDisplayMode="inline"
-      onAppear={reload}
+      onAppear={() => reload()}
       safeAreaInset={
         selecting
           ? {
@@ -1974,11 +2063,11 @@ function FavoritesView() {
                           foregroundStyle="secondaryLabel"
                         />
                         <Text font="caption2" foregroundStyle="secondaryLabel">
-                          {`已选 ${selected.length}`}
+                          {`已选 ${selected.size}`}
                         </Text>
                       </VStack>
                       <Button
-                        disabled={selected.length === 0}
+                        disabled={selected.size === 0}
                         action={deleteSelected}
                         frame={{ maxWidth: "infinity" }}
                       >
@@ -1987,13 +2076,13 @@ function FavoritesView() {
                             systemName="trash"
                             font="title3"
                             foregroundStyle={
-                              selected.length === 0 ? "systemGray3" : "systemRed"
+                              selected.size === 0 ? "systemGray3" : "systemRed"
                             }
                           />
                           <Text
                             font="caption2"
                             foregroundStyle={
-                              selected.length === 0 ? "systemGray3" : "systemRed"
+                              selected.size === 0 ? "systemGray3" : "systemRed"
                             }
                           >
                             删除
@@ -2047,7 +2136,7 @@ function FavoritesView() {
             }
           >
             {sec.items.map((b: Bookmark) => {
-              const isSel = selected.includes(b.id)
+              const isSel = selected.has(b.id)
               return (
                 <Button
                   key={b.id}
@@ -2096,19 +2185,7 @@ function FavoritesView() {
                         font="title3"
                       />
                     ) : null}
-                    <Image
-                      imageUrl={faviconUrl(b.url)}
-                      resizable
-                      frame={{ width: 24, height: 24 }}
-                      placeholder={
-                        <Image
-                          systemName="globe"
-                          foregroundStyle="systemGray3"
-                          frame={{ width: 24, height: 24 }}
-                        />
-                      }
-                      clipShape={{ type: "rect", cornerRadius: 5 }}
-                    />
+                    <FaviconImage url={b.url} />
                     <VStack
                       alignment="leading"
                       spacing={4}
