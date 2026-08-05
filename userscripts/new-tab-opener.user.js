@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.5
+// @version      1.8.5
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 新标签页中打开并直接跳转。
@@ -27,14 +27,14 @@
 
     const KEY = '__tb_';
     const SHARED_ENABLED_KEY_PREFIX = 'newTabEnabledBySite:';
-    const BTN_SIZE = 35;
+    const BTN_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
     const BOTTOM_GAP = 40;
     const LINK_TOOLBAR_GAP = 0;
     const CONNECT_OVERLAP = 1;
     const TOOLBAR_RIGHT_GAP = 16;
-    const NEIGHBOR_TOOLBAR_HEIGHT = 35;
+    const NEIGHBOR_TOOLBAR_HEIGHT = BTN_SIZE;
     const DEFAULT_BOTTOM = BOTTOM_GAP + (NEIGHBOR_TOOLBAR_HEIGHT - BTN_SIZE) / 2;
-    const FALLBACK_TOOLBAR_WIDTH = 70;
+    const FALLBACK_TOOLBAR_WIDTH = BTN_SIZE * 2;
     const DEFAULT_RIGHT = TOOLBAR_RIGHT_GAP + FALLBACK_TOOLBAR_WIDTH + LINK_TOOLBAR_GAP;
     const GROUP_DRAG_EVENT = 'floating-toolbar-group-drag';
     const SHARED_URL_CHANGE_EVENT = 'scripts:urlchange';
@@ -42,17 +42,62 @@
     const COVER_PREVIEW_READY_ATTR = 'data-cover-preview-ready';
     const BACKGROUND_OPEN_REQUEST_EVENT = 'scripts:background-open-request';
     const TAB_CHECK_REQUEST_EVENT = 'scripts:tab-check-request';
-    const GROUP_LEFT_WIDTH = 35;
     const SENSITIVE_ACTION_NAMES = new Set([
         'login', 'signin', 'signout', 'logout', 'auth', 'authorize', 'oauth', 'sso', 'saml',
         'account', 'checkout', 'payment', 'pay', 'billing', 'subscribe', 'purchase', 'confirm',
         'action', 'delete', 'remove', 'follow', 'like', 'vote', 'favorite', 'bookmark', 'cart'
     ]);
+    const DUPLICATE_OPEN_WINDOW = 400;
+
+    // 封面预览联动表：只用于把这些站的封面点击让给 cover-video-preview 脚本处理，
+    // 不再限制链接是否为视频详情页；其余链接判定走通用规则。
+    const COVER_TARGET_RULES = {
+        'rule34video.com': function (target) { return Boolean(target.closest('[data-preview]')); },
+        'spankbang.com': function (target) {
+            const link = target.closest('a[href]');
+            return Boolean(link && link.closest('.video-item, .js-video-item, [id^="recommended_video"]') && link.querySelector('img, video, source'));
+        },
+        'eporner.com': function (target) { return Boolean(target.closest('.mbimg')); },
+        'xhamster.com': function (target) { return Boolean(target.closest('a[data-previewvideo][href*="/videos/"]')); },
+    };
+
+    // 不跳转链接表：命中时点击既不新标签页打开也不放行原生跳转，只按下不动。
+    // 目前用于站点顶部标题/Logo 这类点了没有实际意义的入口。
+    const NO_NAV_TARGET_RULES = {
+        'eporner.com': function (a) { return Boolean(a.closest('#logo')); },
+    };
 
     let enabled = getVal('newTabEnabled', false);
     let enabledRevision = 0;
     const sharedSiteKey = getSharedSiteKey(location.hostname);
     const sharedEnabledKey = SHARED_ENABLED_KEY_PREFIX + sharedSiteKey;
+    const coverTargetRule = COVER_TARGET_RULES[sharedSiteKey] || null;
+    const noNavTargetRule = NO_NAV_TARGET_RULES[sharedSiteKey] || null;
+    const isMissAvSite = /(^|\.)missav\./i.test(location.hostname);
+    let lastOpenedHref = '';
+    let lastOpenedAt = 0;
+    // 链接判定缓存：翻页与敏感判定都需要遍历 DOM 或分词，
+    // 列表页同一链接反复点击时直接复用结果。WeakMap 不阻止元素回收。
+    const linkVerdictCache = new WeakMap();
+    // 当前页面 URL 分量缓存，避免每次点击重建 new URL(location.href)。
+    let currentUrlParts = null;
+
+    function getLinkVerdict(a) {
+        let verdict = linkVerdictCache.get(a);
+        if (!verdict) {
+            verdict = {};
+            linkVerdictCache.set(a, verdict);
+        }
+        return verdict;
+    }
+
+    function refreshCurrentUrlParts() {
+        const current = new URL(location.href);
+        currentUrlParts = { href: location.href, origin: current.origin, pathname: current.pathname, search: current.search };
+        return currentUrlParts;
+    }
+    // 上一次已写入的默认位置；值未变时跳过样式写入，减少滚动时的重排。
+    let lastAppliedLayout = null;
     let toolbar, linkBtn, styleElement, bodyObserver, neighborResizeObserver, neighborMutationObserver, observedNeighbor;
     let listenersInstalled = false;
     let lastHref = location.href;
@@ -207,7 +252,7 @@
     }
 
     function getMissAvPreviewContext(a) {
-        if (!/(^|\.)missav\./i.test(location.hostname) || !a) return null;
+        if (!isMissAvSite || !a) return null;
         const card = a.closest?.('.thumbnail');
         const preview = card?.querySelector?.('video.preview');
         if (!card || !preview) return null;
@@ -224,7 +269,7 @@
     }
 
     function shouldBackgroundOpenOnMissAv(a, url) {
-        if (!/(^|\.)missav\./i.test(location.hostname)) return true;
+        if (!isMissAvSite) return true;
 
         // 详情页中的类型、系列、发行商、导演和标签链接也进入新标签页；
         // 其余站内导航、筛选、排序、翻页、语言切换与账户操作维持网站原本行为。
@@ -238,23 +283,6 @@
         return url.origin === previewUrl.origin &&
             url.pathname === previewUrl.pathname &&
             url.search === previewUrl.search;
-    }
-
-    function shouldBackgroundOpenOnCuratedVideoSite(url) {
-        const site = getSharedSiteKey(location.hostname);
-        if (!['rule34video.com', 'spankbang.com', 'eporner.com', 'xhamster.com', 'pornhub.com'].includes(site)) return null;
-        if (getSharedSiteKey(url.hostname) !== site) return false;
-
-        // 这些站只让具体视频详情页进入新标签页；分类、标签、作者、频道、搜索、
-        // 排序、筛选、翻页、账户与操作链接全部维持网站原本的当前页行为。
-        if (site === 'rule34video.com') return /^\/video\/\d+(?:\/|$)/i.test(url.pathname);
-        if (site === 'spankbang.com') return /^\/[a-z0-9]+\/video(?:\/|$)/i.test(url.pathname);
-        if (site === 'xhamster.com') return /^\/videos\/[^/]+(?:\/|$)/i.test(url.pathname);
-        if (site === 'pornhub.com') {
-            return /^\/view_video\.php$/i.test(url.pathname) && Boolean(url.searchParams.get('viewkey')) ||
-                /^\/shorties\/[^/]+(?:\/|$)/i.test(url.pathname);
-        }
-        return /^\/video-[^/]+(?:\/|$)/i.test(url.pathname) || /^\/hd-porn\/[a-z0-9]+(?:\/|$)/i.test(url.pathname);
     }
 
     function installEnabledStateListener() {
@@ -373,6 +401,11 @@
 
     function requestCheckedBackgroundOpen(href, sourceLink) {
         if (!href) return;
+        // 短时去重：避免连点或站点二次触发开出多个相同标签页。
+        const now = Date.now();
+        if (href === lastOpenedHref && now - lastOpenedAt < DUPLICATE_OPEN_WINDOW) return;
+        lastOpenedHref = href;
+        lastOpenedAt = now;
         const event = new CustomEvent(TAB_CHECK_REQUEST_EVENT, {
             cancelable: true,
             detail: { href, sourceLink: sourceLink || null }
@@ -445,20 +478,34 @@
     }
 
     function getBackgroundOpenUrl(a) {
-        if (!enabled || !a || a.dataset.tbInternalOpen === 'true' || isPaginationLink(a)) return null;
+        // 排序按「代价低、淘汰率高」优先：开关 → href 快速判空 → URL 解析 →
+        // 站点规则 → 交互链接 → 敏感链接 → 翻页链接（最贵，需向上遍历 DOM）。
+        if (!enabled || !a || a.dataset.tbInternalOpen === 'true') return null;
         const rawHref = (a.getAttribute('href') || '').trim();
         if (!rawHref || rawHref[0] === '#') return null;
         let url;
         try { url = new URL(rawHref, document.baseURI); } catch (_) { return null; }
         if (!/^https?:$/i.test(url.protocol) || url.username || url.password) return null;
-        const curatedVideoResult = shouldBackgroundOpenOnCuratedVideoSite(url);
-        // Pornhub 的视频卡片带有仅写入来源 Cookie 的 onclick；它不是交互操作，
-        // 需要允许脚本接管。其余站点仍保留原有的交互链接保护。
-        if (isExplicitInteractiveLink(a) && !(getSharedSiteKey(location.hostname) === 'pornhub.com' && curatedVideoResult === true)) return null;
-        if (curatedVideoResult === null ? !shouldBackgroundOpenOnMissAv(a, url) : !curatedVideoResult) return null;
-        if (isSensitiveActionLink(a, url)) return null;
-        const current = new URL(location.href);
+
+        if (!shouldBackgroundOpenOnMissAv(a, url)) return null;
+
+        if (isExplicitInteractiveLink(a)) return null;
+
+        // 同一元素且 href 未变时复用敏感/翻页判定结果。
+        const verdict = getLinkVerdict(a);
+        if (verdict.href !== url.href) {
+            verdict.href = url.href;
+            verdict.sensitive = undefined;
+            verdict.pagination = undefined;
+        }
+        if (verdict.sensitive === undefined) verdict.sensitive = isSensitiveActionLink(a, url);
+        if (verdict.sensitive) return null;
+
+        const current = currentUrlParts?.href === location.href ? currentUrlParts : refreshCurrentUrlParts();
         if (url.origin === current.origin && url.pathname === current.pathname && url.search === current.search && url.hash) return null;
+
+        if (verdict.pagination === undefined) verdict.pagination = isPaginationLink(a);
+        if (verdict.pagination) return null;
         return url.href;
     }
 
@@ -467,32 +514,42 @@
             !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
     }
 
-    function isCoverPreviewTarget(target, site) {
-        if (!(target instanceof Element) || document.documentElement?.getAttribute(COVER_PREVIEW_READY_ATTR) !== '1') return false;
+    function isCoverPreviewTarget(target) {
+        if (!coverTargetRule || !(target instanceof Element)) return false;
+        if (document.documentElement?.getAttribute(COVER_PREVIEW_READY_ATTR) !== '1') return false;
         if (target.closest('.__mobile_preview_active__')) return true;
-        if (site === 'rule34video.com') return Boolean(target.closest('[data-preview]'));
-        if (site === 'eporner.com') return Boolean(target.closest('.mbimg'));
-        if (site === 'xhamster.com') return Boolean(target.closest('a[data-previewvideo][href*="/videos/"]'));
-        if (site === 'spankbang.com') {
-            const link = target.closest('a[href]');
-            return Boolean(link && link.closest('.video-item, .js-video-item, [id^="recommended_video"]') && link.querySelector('img, video, source'));
-        }
-        return false;
+        return coverTargetRule(target);
     }
 
-    function handleCuratedVideoLinkOpenEarly(e) {
-        const site = getSharedSiteKey(location.hostname);
-        // 这些站会在卡片或 document 的冒泡阶段追加当前页跳转或广告弹窗，
-        // 所以视频链接要先接管；封面预览脚本存在时，封面点击交给它处理，
-        // 标题点击仍直接新标签页打开。
-        if (!['rule34video.com', 'spankbang.com', 'eporner.com', 'xhamster.com', 'pornhub.com'].includes(site) || !isPlainPrimaryClick(e)) return;
-        if (toolbar?.contains(e.target) || isCoverPreviewTarget(e.target, site)) return;
+    function isNoNavLink(a) {
+        return Boolean(noNavTargetRule && a && noNavTargetRule(a));
+    }
+
+    // 单一点击处理器：只在冒泡阶段处理，只取消浏览器默认导航，保留站点已执行的目标/document 处理器。
+    function handleLinkClick(e) {
+        if (!isPlainPrimaryClick(e)) return;
+        if (toolbar?.contains(e.target)) return;
+
+        // 先定位链接：绝大多数点击在这里就结束，不必再跑封面检测。
         const a = findLinkTarget(e.target);
         if (!a || a.dataset.tbInternalOpen === 'true') return;
+        // 站点顶部标题/Logo：让它按网站原生行为在当前标签页返回主页，不新标签页打开也不拦截。
+        if (isNoNavLink(a)) return;
+        // 封面预览脚本存在时，封面点击交给它处理，标题点击仍直接新标签页打开。
+        if (isCoverPreviewTarget(e.target)) return;
+
+        const preview = getMissAvHiddenPreview(a);
+        if (preview) {
+            if (hasNativePreviewHandler(a, preview)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            activateMissAvPreview(preview);
+            return;
+        }
+
         const href = getBackgroundOpenUrl(a);
         if (!href) return;
         e.preventDefault();
-        e.stopImmediatePropagation();
         requestCheckedBackgroundOpen(href, a);
     }
 
@@ -502,31 +559,11 @@
         let url;
         try { url = new URL(String(event.detail.href || ''), document.baseURI); } catch (_) { return; }
         if (!/^https?:$/i.test(url.protocol) || url.username || url.password) return;
-        if (shouldBackgroundOpenOnCuratedVideoSite(url) !== true) return;
+        // 封面预览脚本只会在它自己识别出的封面上发这个事件，不再额外限制链接路径。
         // 封面预览脚本在同一次真实用户点击中同步派发该事件（事件在 content/page 两个 world 间共享）。
         // 用户激活仍在调用栈上，直接新标签页打开并跳转即可；不再依赖任何手势握手。
         event.preventDefault();
         requestCheckedBackgroundOpen(url.href, null);
-    }
-
-    function handleLinkOpen(e) {
-        if (!isPlainPrimaryClick(e)) return;
-        if (toolbar?.contains(e.target)) return;
-        const a = findLinkTarget(e.target);
-        if (!a || a.dataset.tbInternalOpen === 'true') return;
-        const preview = getMissAvHiddenPreview(a);
-        if (preview) {
-            if (hasNativePreviewHandler(a, preview)) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            activateMissAvPreview(preview);
-            return;
-        }
-        const href = getBackgroundOpenUrl(a);
-        if (!href) return;
-        // 在冒泡末端只取消浏览器默认导航；保留站点已执行的目标/document 处理器。
-        e.preventDefault();
-        requestCheckedBackgroundOpen(href, a);
     }
 
     function injectCSS() {
@@ -586,10 +623,13 @@
 
     function clampToolbarGroupPos(left, top, toolbar) {
         const viewport = getViewportBox();
-        const width = Math.max(toolbar?.offsetWidth || toolbar?.getBoundingClientRect?.().width || 0, 35);
-        const height = Math.max(toolbar?.offsetHeight || toolbar?.getBoundingClientRect?.().height || 0, 35);
+        const ownRect = toolbar?.getBoundingClientRect?.();
+        const width = Math.max(toolbar?.offsetWidth || ownRect?.width || 0, BTN_SIZE);
+        const height = Math.max(toolbar?.offsetHeight || ownRect?.height || 0, BTN_SIZE);
         const maxLeft = Math.max(0, viewport.width - width);
-        const minLeft = Math.min(GROUP_LEFT_WIDTH, maxLeft);
+        const leftControl = document.getElementById(BOOKMARK_TOOLBAR_ID);
+        const leftControlWidth = leftControl?.getBoundingClientRect?.().width || BTN_SIZE;
+        const minLeft = Math.min(leftControlWidth, maxLeft);
         return {
             left: Math.max(minLeft, Math.min(left, maxLeft)),
             top: Math.max(0, Math.min(top, viewport.height - height - BOTTOM_GAP)),
@@ -606,6 +646,7 @@
         const pos = clampPos(savedPosition.left, savedPosition.top);
         savedPosition = pos;
         // 纯 fixed：直接用 left/top，不叠加 offset。
+        lastAppliedLayout = null;
         toolbar.style.left = pos.left + 'px';
         toolbar.style.top = pos.top + 'px';
         toolbar.style.right = 'auto';
@@ -657,10 +698,24 @@
     // 默认位置：横向读取悬浮工具栏的实时 rect，把链接按钮无缝贴在其左侧；
     // 纵向始终使用 fixed bottom，不读取 rect.top，避免 iOS 过度滑动/地址栏伸缩时被临时 top 值带偏。
     // 若悬浮工具栏尚未创建，则使用保守 right/bottom 兜底。
+    function writeToolbarLayout(left, top, bottom) {
+        if (lastAppliedLayout &&
+            lastAppliedLayout.left === left &&
+            lastAppliedLayout.top === top &&
+            lastAppliedLayout.bottom === bottom) return;
+        lastAppliedLayout = { left, top, bottom };
+        toolbar.style.left = left;
+        toolbar.style.right = 'auto';
+        toolbar.style.top = top;
+        toolbar.style.bottom = bottom;
+    }
+
     function applyDefaultPosition() {
         if (!toolbar) return;
         const viewport = getViewportBox();
-        const neighbor = document.getElementById(FLOATING_TOOLBAR_ID);
+        // 优先复用已观察的邻居引用，避免每次布局刷新都做 getElementById。
+        let neighbor = observedNeighbor?.isConnected ? observedNeighbor : null;
+        if (!neighbor) neighbor = document.getElementById(FLOATING_TOOLBAR_ID);
         observeNeighbor(neighbor);
         // 纵向用 CSS bottom 锚定贴底（不换算绝对 top），避免 iOS Safari 地址栏伸缩时
         // viewport.height 取到偏大的布局视口高度，把按钮顶到屏幕中间。
@@ -669,23 +724,13 @@
             const rect = neighbor.getBoundingClientRect();
             if (rect.width > 0 && rect.height > 0) {
                 const pos = clampPos(rect.left - LINK_TOOLBAR_GAP - BTN_SIZE + CONNECT_OVERLAP, 0);
-                toolbar.style.left = pos.left + 'px';
-                toolbar.style.right = 'auto';
                 const usesBottom = neighbor.style.bottom && neighbor.style.bottom !== 'auto' && (!neighbor.style.top || neighbor.style.top === 'auto');
-                if (usesBottom) {
-                    toolbar.style.bottom = neighbor.style.bottom;
-                    toolbar.style.top = 'auto';
-                } else {
-                    toolbar.style.top = rect.top + 'px';
-                    toolbar.style.bottom = 'auto';
-                }
+                if (usesBottom) writeToolbarLayout(pos.left + 'px', 'auto', neighbor.style.bottom);
+                else writeToolbarLayout(pos.left + 'px', rect.top + 'px', 'auto');
                 return;
             }
         }
-        toolbar.style.left = defaultRightLeft + 'px';
-        toolbar.style.bottom = DEFAULT_BOTTOM + 'px';
-        toolbar.style.right = 'auto';
-        toolbar.style.top = 'auto';
+        writeToolbarLayout(defaultRightLeft + 'px', 'auto', DEFAULT_BOTTOM + 'px');
     }
 
     // 纯 fixed 定位：允许页面内临时拖动；刷新页面后恢复默认位置。
@@ -713,6 +758,7 @@
         parent.appendChild(toolbar);
 
         savedPosition = null;
+        lastAppliedLayout = null;
         applyDefaultPosition();
 
         updateBtn();
@@ -759,6 +805,7 @@
         } else {
             // 悬浮工具栏未加载时，仍允许链接按钮独立拖动。
             const pos = clampPos(startLeft + dx, startTop + dy);
+            lastAppliedLayout = null;
             toolbar.style.left = pos.left + 'px';
             toolbar.style.top = pos.top + 'px';
             toolbar.style.right = 'auto';
@@ -814,13 +861,14 @@
         requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT);
     }
 
+    const FLOATING_UI_SELECTOR = '#__tb__, #__tb_btn__, #__tb_style__, #' + FLOATING_TOOLBAR_ID + ', #' + BOOKMARK_TOOLBAR_ID;
+
     function mutationTouchesFloatingUi(mutation) {
-        const selector = '#__tb__, #__tb_btn__, #__tb_style__, #' + FLOATING_TOOLBAR_ID + ', #' + BOOKMARK_TOOLBAR_ID;
         const nodes = Array.from(mutation.addedNodes).concat(Array.from(mutation.removedNodes));
         return nodes.some(function (node) {
             if (!(node instanceof Element)) return false;
             if (node.tagName === 'HEAD' || node.tagName === 'BODY') return true;
-            return node.matches?.(selector) || Boolean(node.querySelector?.(selector));
+            return node.matches?.(FLOATING_UI_SELECTOR) || Boolean(node.querySelector?.(FLOATING_UI_SELECTOR));
         });
     }
 
@@ -835,6 +883,8 @@
     }
 
     function schedulePositionStabilize() {
+        // 滞后已有待处理的布局刷新时直接短路，iOS 滞后滚动中不重复进入调度。
+        if (refreshFrame != null && (pendingRefreshFlags & REFRESH_LAYOUT)) return;
         requestRefresh(REFRESH_LAYOUT);
     }
 
@@ -861,6 +911,7 @@
     function scheduleUrlRefresh() {
         if (location.href === lastHref) return;
         lastHref = location.href;
+        currentUrlParts = null;
         requestRefresh(REFRESH_FULL);
     }
 
@@ -908,8 +959,9 @@
 
     async function start() {
         window.addEventListener(BACKGROUND_OPEN_REQUEST_EVENT, handleBackgroundOpenRequest);
-        window.addEventListener('click', handleCuratedVideoLinkOpenEarly, true);
-        window.addEventListener('click', handleLinkOpen);
+        // 捕获阶段监听器已移除。如果某个站点在冒泡阶段追加当前页跳转或
+        // 广告弹窗，只能可能拦不住，需要重新启用抢先拦截。
+        window.addEventListener('click', handleLinkClick);
 
         // document-start 先创建基础按钮；GM 状态读取完成后只刷新开关外观，避免存储延迟阻塞 UI。
         requestRefresh(REFRESH_FULL);
