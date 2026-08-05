@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.6
+// @version      1.6.9
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
@@ -34,11 +34,8 @@
   const BOUND_LINK_ID = "__tb__";
   const BOOKMARK_TOOLBAR_ID = "tab-save-toolbar";
   const PAGE_NAVIGATION_ID = "floating-page-navigation";
-  const ITEM_SIZE = 35;
-  const BOUND_CONTROL_SIZE = 35;
+  const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
   const CONNECT_OVERLAP = 1;
-  const PAGE_NAVIGATION_WIDTH = 70;
-  const VIDEO_FULLSCREEN_WIDTH = 35;
   const PAGE_NAVIGATION_RIGHT_GAP = 16;
   const SAFE_BOTTOM_GAP = 40;
   const DEFAULT_BOTTOM_GAP = 28;
@@ -93,12 +90,20 @@
     };
   }
 
+  function elementWidth(id, fallback = 0) {
+    const element = document.getElementById(id);
+    if (!element?.isConnected) return fallback;
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0) return rect.width;
+    const computedWidth = Number.parseFloat(getComputedStyle(element).width);
+    return Number.isFinite(computedWidth) && computedWidth > 0 ? computedWidth : fallback;
+  }
+
   function rightAccessoryWidth() {
-    // 翻页组件存在时，始终再为最右侧全屏按钮预留一个按钮宽度；按钮显隐时
-    // 不移动前六个按钮，同时避免页面出现预览视频后全屏按钮伸出可视区域。
-    return document.getElementById(PAGE_NAVIGATION_ID)
-      ? PAGE_NAVIGATION_WIDTH + VIDEO_FULLSCREEN_WIDTH
-      : 0;
+    // 优先读取相邻组件的实时宽度；组件暂未创建时才使用由当前按钮尺寸推导的兜底值。
+    const navigation = document.getElementById(PAGE_NAVIGATION_ID);
+    if (!navigation) return 0;
+    return elementWidth(PAGE_NAVIGATION_ID, ITEM_SIZE * 2) + elementWidth("video-fullscreen", ITEM_SIZE);
   }
 
   function defaultRightGap() {
@@ -110,7 +115,8 @@
     const width = Math.max(toolbar?.offsetWidth || 0, ITEM_SIZE * 2);
     const height = Math.max(toolbar?.offsetHeight || 0, ITEM_SIZE);
     const maxLeft = Math.max(0, viewport.width - width - rightAccessoryWidth());
-    const minLeft = document.getElementById(BOUND_LINK_ID) ? Math.min(BOUND_CONTROL_SIZE, maxLeft) : 0;
+    const boundControlWidth = elementWidth(BOUND_LINK_ID, ITEM_SIZE);
+    const minLeft = document.getElementById(BOUND_LINK_ID) ? Math.min(boundControlWidth, maxLeft) : 0;
     return {
       left: Math.max(minLeft, Math.min(left, maxLeft)),
       top: Math.max(0, Math.min(top, viewport.height - height - SAFE_BOTTOM_GAP)),
@@ -154,7 +160,8 @@
     }
     const rect = toolbar.getBoundingClientRect();
     if (!(rect.width > 0 && rect.height > 0)) return;
-    control.style.left = `${Math.max(0, rect.left - BOUND_CONTROL_SIZE + CONNECT_OVERLAP)}px`;
+    const controlWidth = control.getBoundingClientRect().width || control.offsetWidth || ITEM_SIZE;
+    control.style.left = `${Math.max(0, rect.left - controlWidth + CONNECT_OVERLAP)}px`;
     control.style.right = "auto";
     const usesBottom = toolbar.style.bottom && toolbar.style.bottom !== "auto" && (!toolbar.style.top || toolbar.style.top === "auto");
     if (usesBottom) {

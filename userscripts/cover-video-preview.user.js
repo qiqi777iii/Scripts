@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         视频封面预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.3.2
-// @description  首次点按视频封面播放静音预览，再次点按进入详情；支持通用网页检测，并保留已适配站点的专用逻辑。
+// @version      1.4.1
+// @description  单击视频封面播放静音预览，再次点击进入详情。
 // @match        *://*/*
 // @grant        none
 // @run-at       document-start
@@ -15,6 +15,7 @@
 
     const PREVIEW_CLASS = '__mobile_preview__';
     const ACTIVE_CLASS = '__mobile_preview_active__';
+    const READY_CLASS = '__mobile_preview_ready__';
     const COVER_PREVIEW_READY_ATTR = 'data-cover-preview-ready';
     const LINK_INTERACTION_OWNER_ATTR = 'data-link-interaction-owner';
     const BACKGROUND_OPEN_REQUEST_EVENT = 'scripts:background-open-request';
@@ -35,6 +36,7 @@
     let active = null;
     let gesture = null;
     let compatClickGuard = null;
+    let passThroughClickGuard = null;
     let lastScrollAt = 0;
     let lastScrollY = window.scrollY;
     let nativePreviewBlockUntil = 0;
@@ -177,7 +179,18 @@
         return Boolean(cardUrl(card) && card.querySelector('img, picture') && resolvePreviewUrl(card));
     }
 
+    function isFormalPlayerTarget(target) {
+        if (!(target instanceof Element)) return false;
+        const video = target.closest('video');
+        if (video instanceof HTMLVideoElement && !video.matches('video.preview, .' + PREVIEW_CLASS)) {
+            if (video.controls || video.closest('[class*="player" i], [id*="player" i], [data-player]')) return true;
+        }
+        const player = target.closest('[class*="video-player" i], [class*="main-player" i], [id*="video-player" i], [data-testid*="player" i]');
+        return Boolean(player?.querySelector('video[controls]:not(.preview)'));
+    }
+
     function findCard(target) {
+        if (isFormalPlayerTarget(target)) return null;
         let card = null;
 
         if (IS_XVIDEOS) {
@@ -436,7 +449,8 @@
         const style = document.createElement('style');
         style.id = '__mobile_preview_style__';
         style.textContent = `
-.${PREVIEW_CLASS}{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:cover!important;display:block!important;z-index:2147483000!important;margin:0!important;padding:0!important;border:0!important;outline:0!important;background:#000!important;pointer-events:none!important;opacity:1!important;visibility:visible!important;}
+.${PREVIEW_CLASS}{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:cover!important;display:block!important;z-index:2147483000!important;margin:0!important;padding:0!important;border:0!important;outline:0!important;background:#000!important;pointer-events:none!important;opacity:0!important;visibility:visible!important;transition:opacity .12s ease!important;}
+.${PREVIEW_CLASS}.${READY_CLASS}{opacity:1!important;}
 `;
         (document.head || document.documentElement).appendChild(style);
     }
@@ -536,6 +550,7 @@
         if (!current) return;
         current.observer?.disconnect();
         current.video.removeEventListener('error', current.onError);
+        current.video.removeEventListener('loadeddata', current.onReady);
         if (current.native) restoreNativeVideo(current.video, current.snapshot);
         else releaseDynamicVideo(current.video);
         current.card?.classList.remove(ACTIVE_CLASS);
@@ -564,11 +579,20 @@
             scrollY: window.scrollY,
             observer: null,
             onError: null,
+            onReady: null,
         };
         record.observer = watchVisibility(card);
         record.onError = function () { if (active === record) stopActive(); };
+        record.onReady = function () {
+            if (active !== record) return;
+            video.classList.add(READY_CLASS);
+            details.image?.classList.add('hidden');
+        };
         video.addEventListener('error', record.onError, { once: true });
+        if (video.readyState >= 2) record.onReady();
+        else video.addEventListener('loadeddata', record.onReady, { once: true });
         active = record;
+        if (video.readyState >= 2) record.onReady();
         return record;
     }
 
@@ -587,7 +611,7 @@
         video.loop = true;
         video.autoplay = true;
         video.playsInline = true;
-        video.preload = 'auto';
+        video.preload = 'metadata';
         video.disablePictureInPicture = true;
         video.setAttribute('muted', '');
         video.setAttribute('playsinline', '');
@@ -609,8 +633,24 @@
         return true;
     }
 
+    function stopOtherNativePreviews(exceptVideo) {
+        document.querySelectorAll('video.preview').forEach(function (candidate) {
+            if (candidate === exceptVideo || candidate === active?.video) return;
+            try { candidate.pause(); } catch (_) {}
+            try { candidate.currentTime = 0; } catch (_) {}
+            candidate.classList.add('hidden');
+            candidate.parentElement?.querySelector('img')?.classList.remove('hidden');
+        });
+    }
+
     function mountNativePreview(card, video) {
         stopActive();
+        stopOtherNativePreviews(video);
+        addStyle();
+        const host = video.parentElement instanceof HTMLElement ? video.parentElement : card;
+        const oldPosition = host.style.position;
+        const positionChanged = getComputedStyle(host).position === 'static';
+        if (positionChanged) host.style.position = 'relative';
         const snapshot = snapshotNativeVideo(video);
         const src = sourceFromMedia(video);
         if (src && !video.getAttribute('src')) video.src = src;
@@ -622,9 +662,9 @@
         video.setAttribute('playsinline', '');
         video.setAttribute('webkit-playsinline', '');
         video.classList.remove('hidden');
-        snapshot.image?.classList.add('hidden');
+        video.classList.add(PREVIEW_CLASS);
         card.classList.add(ACTIVE_CLASS);
-        createActiveRecord(card, video.parentElement || card, video, { native: true, snapshot });
+        createActiveRecord(card, host, video, { native: true, snapshot, image: snapshot.image, oldPosition, positionChanged });
         try {
             const task = video.play();
             task?.catch?.(function () { if (active?.video === video) stopActive(); });
@@ -652,19 +692,14 @@
         return event.defaultPrevented;
     }
 
-    function openCardLink(card, expectedHref = null) {
-        const href = expectedHref || cardUrl(card);
-        if (!href) return;
-        stopActive();
-        if (requestBackgroundOpen(href)) return;
-        location.assign(href);
-    }
-
     function performCoverAction(card, expectedHref = null) {
         const href = expectedHref || cardUrl(card);
-        if (!href || cardUrl(card) !== href) return;
-        if (active?.card === card && active.href === href) openCardLink(card, href);
-        else startPreview(card);
+        if (!href || cardUrl(card) !== href) return 'passthrough';
+        if (active?.card === card && active.href === href) {
+            stopActive();
+            return requestBackgroundOpen(href) ? 'handled' : 'passthrough';
+        }
+        return startPreview(card) ? 'handled' : 'passthrough';
     }
 
     function sameContext(card, href, otherCard, otherHref) {
@@ -683,6 +718,21 @@
         }
         if (compatClickGuard.card !== card || compatClickGuard.href !== cardUrl(card)) return false;
         compatClickGuard = null;
+        return true;
+    }
+
+    function allowCompatibilityClick(card) {
+        if (card) passThroughClickGuard = { card, href: cardUrl(card), until: Date.now() + 900 };
+    }
+
+    function consumePassThroughClick(card) {
+        if (!passThroughClickGuard) return false;
+        if (Date.now() >= passThroughClickGuard.until) {
+            passThroughClickGuard = null;
+            return false;
+        }
+        if (passThroughClickGuard.card !== card || passThroughClickGuard.href !== cardUrl(card)) return false;
+        passThroughClickGuard = null;
         return true;
     }
 
@@ -721,6 +771,7 @@
 
     window.addEventListener('touchstart', function (event) {
         compatClickGuard = null;
+        passThroughClickGuard = null;
         nativeTouchCard = null;
         if (event.isTrusted !== true || event.touches.length !== 1) {
             gesture = null;
@@ -748,20 +799,21 @@
             startedAt: now,
             settled: now - lastScrollAt >= SCROLL_SETTLE_MS,
             moved: false,
+            secondTap: active?.card === card && active.href === cardUrl(card),
         };
         nativePreviewBlockUrl = gesture.href;
         nativePreviewBlockUntil = now + 1200;
-        // 只在需要阻断站点原生触摸预览时截断网页监听；不 preventDefault，保留滚动和长按。
-        if (BLOCK_NATIVE_SITE_PREVIEW) event.stopImmediatePropagation();
+        // 首次点按可阻止站点自己的悬停预览；第二次点按保留网站原生导航事件链。
+        if (BLOCK_NATIVE_SITE_PREVIEW && !gesture.secondTap) event.stopImmediatePropagation();
     }, { capture: true, passive: true });
 
     window.addEventListener('touchmove', function (event) {
-        if (IS_EPORNER && nativeTouchCard) {
+        if (IS_EPORNER && nativeTouchCard && !gesture?.secondTap) {
             stopEpornerNativePreview();
             event.stopImmediatePropagation();
         }
         if (!gesture) return;
-        if (BLOCK_NATIVE_SITE_PREVIEW) event.stopImmediatePropagation();
+        if (BLOCK_NATIVE_SITE_PREVIEW && !gesture.secondTap) event.stopImmediatePropagation();
         if (event.touches.length !== 1 || gesture.moved) return;
         const point = event.touches[0];
         const fingerDistance = Math.hypot(point.clientX - gesture.x, point.clientY - gesture.y);
@@ -777,7 +829,7 @@
         const nativeOrigin = nativeTouchCard;
         gesture = null;
         nativeTouchCard = null;
-        if (IS_EPORNER && nativeOrigin) {
+        if (IS_EPORNER && nativeOrigin && !origin?.secondTap) {
             stopEpornerNativePreview();
             event.stopImmediatePropagation();
         }
@@ -785,10 +837,8 @@
         const endCard = findCard(event.target);
         const endHref = cardUrl(endCard);
         const endIsCover = Boolean(endCard && isCoverTarget(endCard, event.target));
-        guardCompatibilityClick(origin.card);
         nativePreviewBlockUrl = origin.href;
         nativePreviewBlockUntil = Date.now() + 800;
-        if (BLOCK_NATIVE_SITE_PREVIEW) event.stopImmediatePropagation();
 
         const elapsed = Date.now() - origin.startedAt;
         const endPoint = event.changedTouches?.[0] || null;
@@ -798,9 +848,14 @@
         const validTap = !origin.moved && endDistance < SWIPE_CANCEL_DISTANCE && origin.settled && !pageMoved && !pageStillSettling &&
             elapsed < TAP_MAX_MS && endIsCover && sameContext(origin.card, origin.href, endCard, endHref);
         if (!validTap) return;
+        const result = performCoverAction(origin.card, origin.href);
+        if (result === 'passthrough') {
+            allowCompatibilityClick(origin.card);
+            return;
+        }
+        guardCompatibilityClick(origin.card);
         event.preventDefault();
         event.stopImmediatePropagation();
-        performCoverAction(origin.card, origin.href);
     }, { capture: true, passive: false });
 
     window.addEventListener('touchcancel', function (event) {
@@ -831,15 +886,17 @@
             return;
         }
         if (!isCoverTarget(card, event.target)) return;
+        if (consumePassThroughClick(card)) return;
         if (consumeCompatibilityClick(card)) {
             event.preventDefault();
             event.stopImmediatePropagation();
             return;
         }
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const result = performCoverAction(card);
+        if (result === 'passthrough') return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        performCoverAction(card);
     }, true);
 
     window.addEventListener('scroll', function (event) {
