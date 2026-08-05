@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.3.7
+// @version 2.4.0
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -29,7 +29,7 @@
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__"
   const STORE_FILE_NAME = "tabs-saver-store.json"
   const DEFAULT_GROUP_NAME = "默认"
-  const BTN_SIZE = 35
+  const BTN_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40
 
   // 收藏按钮默认放在“新标签页打开”按钮左侧；其未加载时再放到悬浮工具栏左侧。
   const NEW_TAB_TOOLBAR_ID = "__tb__"
@@ -64,6 +64,7 @@
   let savedVisualEpoch = 0
   let rootObserver = null
   let observedRoot = null
+  let observedBody = null
   let headObserver = null
   let observedHead = null
   let globalListenersInstalled = false
@@ -72,6 +73,9 @@
   let observedNeighbor = null
   let bootRetryTimer = null
   let bootRetryCount = 0
+  let lastLayout = null
+  let layoutStabilizeTimer = null
+  const LAYOUT_STABILIZE_DELAY = 120
   const BOOT_RETRY_DELAYS = [30, 120, 500, 1500, 3000, 6000]
 
   function uid() {
@@ -95,14 +99,25 @@
     }
   }
 
+  // new URL() 很贵，而收藏库里的地址会在每次刷新时被反复归一化，用有上限的缓存复用结果。
+  const normalizedUrlCache = new Map()
+  const NORMALIZED_URL_CACHE_MAX = 2000
+
   function normalizeUrl(url) {
+    if (typeof url !== "string" || url === "") return ""
+    const cached = normalizedUrlCache.get(url)
+    if (cached !== undefined) return cached
+    let result
     try {
       const value = new URL(url)
       value.hash = ""
-      return value.toString()
+      result = value.toString()
     } catch (_) {
-      return url
+      result = url
     }
+    if (normalizedUrlCache.size >= NORMALIZED_URL_CACHE_MAX) normalizedUrlCache.clear()
+    normalizedUrlCache.set(url, result)
+    return result
   }
 
   function pageTitle() {
@@ -110,7 +125,19 @@
     return metaTitle || document.title.trim() || location.href
   }
 
-  async function loadStore(file) {
+  // 前台切换、URL 变化等会连续触发收藏状态刷新，短 TTL 缓存避免重复读取并解析整个收藏库。
+  const STORE_CACHE_TTL = 1500
+  let storeCache = null
+  let storeCacheAt = 0
+  let storeCachePromise = null
+
+  function invalidateStoreCache() {
+    storeCache = null
+    storeCacheAt = 0
+    storeCachePromise = null
+  }
+
+  async function readStoreFile(file) {
     try {
       if (!(await Scripting.FileManager.exists(file))) return { version: 1, groups: [] }
       const raw = await Scripting.FileManager.readAsString(file)
@@ -122,9 +149,28 @@
     }
   }
 
+  async function loadStore(file, { allowCache = false } = {}) {
+    if (!allowCache) {
+      invalidateStoreCache()
+      return await readStoreFile(file)
+    }
+    if (storeCache && now() - storeCacheAt < STORE_CACHE_TTL) return storeCache
+    if (storeCachePromise) return await storeCachePromise
+    storeCachePromise = readStoreFile(file)
+    try {
+      const data = await storeCachePromise
+      storeCache = data
+      storeCacheAt = now()
+      return data
+    } finally {
+      storeCachePromise = null
+    }
+  }
+
   async function saveStore(file, store) {
     store.updatedAt = now()
     await Scripting.FileManager.writeAsString(file, JSON.stringify(store))
+    invalidateStoreCache()
   }
 
   function ensureGroups(store) {
@@ -155,7 +201,20 @@
 
   function hasBookmark(store, url) {
     const target = normalizeUrl(url)
-    return ensureGroups(store).some(group => Array.isArray(group.bookmarks) && group.bookmarks.some(bookmark => normalizeUrl(bookmark?.url || "") === target))
+    if (!target) return false
+    const groups = ensureGroups(store)
+    for (let gi = 0; gi < groups.length; gi++) {
+      const bookmarks = groups[gi]?.bookmarks
+      if (!Array.isArray(bookmarks)) continue
+      for (let bi = 0; bi < bookmarks.length; bi++) {
+        const raw = bookmarks[bi]?.url
+        if (typeof raw !== "string" || raw === "") continue
+        // 绝大多数存储的地址本身已是归一化形式，先做字符串直判避开 URL 解析。
+        if (raw === target) return true
+        if (normalizeUrl(raw) === target) return true
+      }
+    }
+    return false
   }
 
   function tabBookmark(tab) {
@@ -399,7 +458,7 @@
     const epoch = ++savedVisualEpoch
     try {
       const { file } = storePath()
-      const store = await loadStore(file)
+      const store = await loadStore(file, { allowCache: true })
       if (epoch === savedVisualEpoch && location.href === href) setSavedVisual(hasBookmark(store, href))
     } catch (_) {
       if (epoch === savedVisualEpoch && location.href === href) setSavedVisual(false)
@@ -419,7 +478,7 @@
     const style = document.createElement("style")
     style.id = "tab-save-style"
     style.textContent = `
-#${WRAP_ID}{position:fixed;left:0;top:0;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top;}
+#${WRAP_ID}{position:fixed;left:0;top:0;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;}
 #${BUTTON_ID}{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:#F2F2F7;color:rgba(28,28,30,.82);border:0;box-shadow:inset 0 0 0 .5px var(--combined-separator);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,border-radius .12s ease;}
 #${BUTTON_ID}[data-connected-right="true"]{border-radius:999px 0 0 999px;box-shadow:inset .5px 0 0 var(--combined-separator),inset 0 .5px 0 var(--combined-separator),inset 0 -.5px 0 var(--combined-separator);}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
@@ -483,14 +542,31 @@
     }
   }
 
+  // 位置没变时不写 style，避免每帧无意义的重排。
+  function writeLayout(left, top, bottom) {
+    if (!wrap) return
+    if (
+      lastLayout &&
+      lastLayout.left === left &&
+      lastLayout.top === top &&
+      lastLayout.bottom === bottom
+    ) return
+    lastLayout = { left, top, bottom }
+    wrap.style.left = left == null ? "auto" : left + "px"
+    wrap.style.top = top == null ? "auto" : top + "px"
+    wrap.style.bottom = bottom == null ? "auto" : bottom + "px"
+    wrap.style.right = "auto"
+  }
+
+  function invalidateLayoutCache() {
+    lastLayout = null
+  }
+
   function applySavedPosition() {
     if (!wrap || !savedPosition) return false
     const pos = clampPos(savedPosition.left, savedPosition.top)
     savedPosition = pos
-    wrap.style.left = pos.left + "px"
-    wrap.style.top = pos.top + "px"
-    wrap.style.right = "auto"
-    wrap.style.bottom = "auto"
+    writeLayout(pos.left, pos.top, null)
     return true
   }
 
@@ -506,12 +582,20 @@
     if (!button?.isConnected || !wrap?.isConnected) return
     const newTabToolbar = document.getElementById(NEW_TAB_TOOLBAR_ID)
     const floatingToolbar = document.getElementById(FLOATING_TOOLBAR_ID)
-    const connectedToNewTab = controlsAreAdjacent(wrap, newTabToolbar)
-    const connectedToFloating = !connectedToNewTab && controlsAreAdjacent(wrap, floatingToolbar)
-    button.dataset.connectedRight = (connectedToNewTab || connectedToFloating) ? "true" : "false"
+    // 无相邻组件时不必读取几何信息。
+    const connectedToNewTab = newTabToolbar ? controlsAreAdjacent(wrap, newTabToolbar) : false
+    const connectedToFloating = !connectedToNewTab && floatingToolbar ? controlsAreAdjacent(wrap, floatingToolbar) : false
+    const connectedRight = (connectedToNewTab || connectedToFloating) ? "true" : "false"
+    if (button.dataset.connectedRight !== connectedRight) button.dataset.connectedRight = connectedRight
     const newTabButton = document.getElementById("__tb_btn__")
-    if (newTabButton) newTabButton.dataset.connectedLeft = connectedToNewTab ? "true" : "false"
-    if (floatingToolbar && !newTabToolbar) floatingToolbar.dataset.connectedLeft = connectedToFloating ? "true" : "false"
+    if (newTabButton) {
+      const value = connectedToNewTab ? "true" : "false"
+      if (newTabButton.dataset.connectedLeft !== value) newTabButton.dataset.connectedLeft = value
+    }
+    if (floatingToolbar && !newTabToolbar) {
+      const value = connectedToFloating ? "true" : "false"
+      if (floatingToolbar.dataset.connectedLeft !== value) floatingToolbar.dataset.connectedLeft = value
+    }
   }
 
   function observeNeighbor(neighbor) {
@@ -543,30 +627,20 @@
       const neighborVisible = rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < viewport.width && rect.bottom > 0 && rect.top < viewport.height
       if (neighborVisible) {
         const pos = clampPos(rect.left - INITIAL_GAP - BTN_SIZE + CONNECT_OVERLAP, rect.top)
-        wrap.style.left = pos.left + "px"
-        wrap.style.right = "auto"
         // bottom 锚点只有在当前视口内有效时才沿用；否则使用已限制在视口内的 top。
         if (hasBottomAnchor(neighbor)) {
           const computedBottom = parseFloat(getComputedStyle(neighbor).bottom)
           if (Number.isFinite(computedBottom) && computedBottom >= 0 && computedBottom <= Math.max(0, viewport.height - BTN_SIZE)) {
-            wrap.style.bottom = computedBottom + "px"
-            wrap.style.top = "auto"
-          } else {
-            wrap.style.top = pos.top + "px"
-            wrap.style.bottom = "auto"
+            writeLayout(pos.left, null, computedBottom)
+            return
           }
-        } else {
-          wrap.style.top = pos.top + "px"
-          wrap.style.bottom = "auto"
         }
+        writeLayout(pos.left, pos.top, null)
         return
       }
     }
     const left = Math.max(0, Math.floor(viewport.width - BTN_SIZE - FALLBACK_RIGHT))
-    wrap.style.left = left + "px"
-    wrap.style.bottom = BOTTOM_GAP + "px"
-    wrap.style.right = "auto"
-    wrap.style.top = "auto"
+    writeLayout(left, null, BOTTOM_GAP)
   }
 
   const REFRESH_STRUCTURE = 1
@@ -589,7 +663,6 @@
           if (savedPosition) applySavedPosition()
           else applyDefaultPosition()
           refreshConnectedVisual()
-          wrap.style.transform = "translate3d(0,0,0)"
         }
       } catch (_) {
         INSTANCE.phase = "failed"
@@ -601,8 +674,13 @@
     else refreshFrame = setTimeout(run, 16)
   }
 
+  // 按钮是 fixed 定位，布局收敛不需要跟帧；合并到一个延时窗口里，避免连续事件反复强制布局。
   function schedulePositionStabilize() {
-    requestRefresh(REFRESH_LAYOUT)
+    if (layoutStabilizeTimer != null) return
+    layoutStabilizeTimer = setTimeout(() => {
+      layoutStabilizeTimer = null
+      requestRefresh(REFRESH_LAYOUT)
+    }, LAYOUT_STABILIZE_DELAY)
   }
 
   function onPointerDown(e) {
@@ -615,6 +693,9 @@
     const rect = wrap.getBoundingClientRect()
     startLeft = rect.left
     startTop = rect.top
+    invalidateLayoutCache()
+    // 只在拖拽期间提升为合成层，避免常驻 will-change 占用显存。
+    wrap.style.willChange = "left,top"
     wrap.style.left = rect.left + "px"
     wrap.style.top = rect.top + "px"
     wrap.style.right = "auto"
@@ -640,6 +721,8 @@
     e.preventDefault()
     e.stopPropagation()
     dragging = false
+    wrap.style.willChange = "auto"
+    invalidateLayoutCache()
     requestRefresh(REFRESH_LAYOUT)
     button.releasePointerCapture?.(e.pointerId)
     if (moved) {
@@ -719,17 +802,32 @@
     if (globalListenersInstalled) return
     globalListenersInstalled = true
     window.addEventListener("resize", schedulePositionStabilize)
-    window.addEventListener("scroll", schedulePositionStabilize, { passive: true })
+    // 按钮与相邻组件都是 fixed 定位，普通页面滚动不会改变它们的位置，
+    // 因此不监听 window scroll；只在可视视口（缩放/键盘）发生变化时重新收敛。
     window.visualViewport?.addEventListener("resize", schedulePositionStabilize)
-    window.visualViewport?.addEventListener("scroll", schedulePositionStabilize)
+    window.visualViewport?.addEventListener("scroll", schedulePositionStabilize, { passive: true })
     window.addEventListener(SHARED_URL_CHANGE_EVENT, () => requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT))
-    window.addEventListener("pageshow", () => requestRefresh(REFRESH_FULL))
-    window.addEventListener("focus", () => requestRefresh(REFRESH_FULL))
+    window.addEventListener("pageshow", recoverIfFailed)
+    window.addEventListener("focus", recoverIfFailed)
     window.addEventListener("load", () => requestRefresh(REFRESH_FULL), { once: true })
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) requestRefresh(REFRESH_FULL)
+      if (!document.hidden) recoverIfFailed()
     })
     try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => requestRefresh(REFRESH_LAYOUT)) } catch (_) {}
+  }
+
+  // 重试上限用完后不再有自动唤醒；这些事件在页面重新可见/获得焦点时兜底重新启动。
+  function recoverIfFailed() {
+    if (INSTANCE.phase === "failed") {
+      bootRetryCount = 0
+      if (bootRetryTimer) {
+        clearTimeout(bootRetryTimer)
+        bootRetryTimer = null
+      }
+      boot("recover")
+      return
+    }
+    requestRefresh(REFRESH_FULL)
   }
 
   function ensureButtonHealthy() {
@@ -751,7 +849,10 @@
     wrap = currentWrap
     button = currentButton
     const parent = document.body || document.documentElement
-    if (parent && currentWrap.parentNode !== parent) parent.appendChild(currentWrap)
+    if (parent && currentWrap.parentNode !== parent) {
+      parent.appendChild(currentWrap)
+      invalidateLayoutCache()
+    }
     // 节点健康不代表位置健康：相邻按钮可能在稍后才出现，必须重新收敛组合顺序。
     schedulePositionStabilize()
   }
@@ -778,29 +879,47 @@
   }
 
   function mutationTouchesFloatingUi(mutation) {
+    // subtree 监听下变动可能发生在页面任意深度，target 不再局限于顶层容器；
+    // 只按新增/移除节点是否命中悬浮组件选择器判定，避免漏检深层重写。
     const selector = `#${WRAP_ID}, #${BUTTON_ID}, #tab-save-style, #${NEW_TAB_TOOLBAR_ID}, #${FLOATING_TOOLBAR_ID}`
-    const nodes = [...mutation.addedNodes, ...mutation.removedNodes]
-    return nodes.some(node => {
-      if (!(node instanceof Element)) return false
-      if (node.tagName === "HTML" || node.tagName === "HEAD" || node.tagName === "BODY") return true
-      return node.matches?.(selector) || Boolean(node.querySelector?.(selector))
-    })
+    const added = mutation.addedNodes
+    const removed = mutation.removedNodes
+    for (let i = 0; i < added.length; i++) {
+      if (nodeTouchesFloatingUi(added[i], selector)) return true
+    }
+    for (let i = 0; i < removed.length; i++) {
+      if (nodeTouchesFloatingUi(removed[i], selector)) return true
+    }
+    return false
+  }
+
+  function nodeTouchesFloatingUi(node, selector) {
+    if (!(node instanceof Element)) return false
+    if (node.tagName === "HTML" || node.tagName === "HEAD" || node.tagName === "BODY") return true
+    return Boolean(node.matches?.(selector)) || Boolean(node.querySelector?.(selector))
   }
 
   function startDomGuard() {
     const root = document.documentElement
     if (!root) return
     watchHead(document.head)
-    if (rootObserver && observedRoot === root && root.isConnected) return
+    const body = document.body || null
+    if (rootObserver && observedRoot === root && observedBody === body && root.isConnected) return
     rootObserver?.disconnect()
     observedRoot = root
+    observedBody = body
     rootObserver = new MutationObserver(mutations => {
       if (!mutations.some(mutationTouchesFloatingUi)) return
       watchHead(document.head)
       scheduleHealthCheck()
       schedulePositionStabilize()
     })
-    rootObserver.observe(document, { childList: true, subtree: true })
+    // 悬浮按钮只会被挂在 documentElement 或 body 的直接子节点上，因此不需要 subtree；
+    // 避免在无限滚动类页面上为每一批内容插入都生成 mutation 记录。
+    // 曾经只观察直接子节点以省性能，但站点在深层重写 DOM（插屏广告、反复重排）时会漏检；
+    // 改用 subtree 以确保按钮被清空后仍能被结构监听捕捉到并重建。
+    rootObserver.observe(root, { childList: true, subtree: true })
+    if (body) rootObserver.observe(body, { childList: true, subtree: true })
   }
 
   function createButton() {
@@ -826,6 +945,7 @@
     button.addEventListener("pointercancel", onPointerUp)
     wrap.appendChild(button)
     document.documentElement.appendChild(wrap)
+    invalidateLayoutCache()
     return true
   }
 
