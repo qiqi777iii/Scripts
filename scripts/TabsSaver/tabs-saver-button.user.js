@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.4.0
+// @version 2.4.1
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -61,6 +61,8 @@
   let startX = 0, startY = 0, startLeft = 0, startTop = 0
   let pendingRefreshFlags = 0
   let refreshFrame = null
+  let refreshFallbackTimer = null
+  let refreshToken = 0
   let savedVisualEpoch = 0
   let rootObserver = null
   let observedRoot = null
@@ -648,11 +650,26 @@
   const REFRESH_LAYOUT = 4
   const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT
 
+  function cancelPendingRefreshSchedule() {
+    refreshToken += 1
+    if (refreshFrame != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(refreshFrame)
+    if (refreshFallbackTimer != null) clearTimeout(refreshFallbackTimer)
+    refreshFrame = null
+    refreshFallbackTimer = null
+  }
+
   function requestRefresh(flags = REFRESH_FULL) {
     pendingRefreshFlags |= flags
-    if ((document.hidden && INSTANCE.phase === "running") || refreshFrame != null) return
+    if ((document.hidden && INSTANCE.phase === "running") || refreshFrame != null || refreshFallbackTimer != null) return
+    const token = ++refreshToken
+    let completed = false
     const run = () => {
+      if (completed || token !== refreshToken) return
+      completed = true
+      if (refreshFrame != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(refreshFrame)
+      if (refreshFallbackTimer != null) clearTimeout(refreshFallbackTimer)
       refreshFrame = null
+      refreshFallbackTimer = null
       const currentFlags = pendingRefreshFlags
       pendingRefreshFlags = 0
       try {
@@ -670,8 +687,12 @@
         scheduleBootRetry()
       }
     }
-    if (typeof requestAnimationFrame === "function") refreshFrame = requestAnimationFrame(run)
-    else refreshFrame = setTimeout(run, 16)
+    if (typeof requestAnimationFrame === "function") {
+      refreshFrame = requestAnimationFrame(run)
+      refreshFallbackTimer = setTimeout(run, 240)
+    } else {
+      refreshFallbackTimer = setTimeout(run, 16)
+    }
   }
 
   // 按钮是 fixed 定位，布局收敛不需要跟帧；合并到一个延时窗口里，避免连续事件反复强制布局。
@@ -809,7 +830,7 @@
     window.addEventListener(SHARED_URL_CHANGE_EVENT, () => requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT))
     window.addEventListener("pageshow", recoverIfFailed)
     window.addEventListener("focus", recoverIfFailed)
-    window.addEventListener("load", () => requestRefresh(REFRESH_FULL), { once: true })
+    window.addEventListener("load", recoverIfFailed, { once: true })
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) recoverIfFailed()
     })
@@ -818,12 +839,13 @@
 
   // 重试上限用完后不再有自动唤醒；这些事件在页面重新可见/获得焦点时兜底重新启动。
   function recoverIfFailed() {
+    bootRetryCount = 0
+    if (bootRetryTimer) {
+      clearTimeout(bootRetryTimer)
+      bootRetryTimer = null
+    }
+    cancelPendingRefreshSchedule()
     if (INSTANCE.phase === "failed") {
-      bootRetryCount = 0
-      if (bootRetryTimer) {
-        clearTimeout(bootRetryTimer)
-        bootRetryTimer = null
-      }
       boot("recover")
       return
     }
@@ -992,14 +1014,14 @@
 
   INSTANCE.resume = () => {
     bootRetryCount = 0
+    cancelPendingRefreshSchedule()
     return boot("resume")
   }
   boot("initial")
   if (document.readyState === "loading") {
     // 按钮不依赖 body，立即创建；DOMContentLoaded 只作为额外健康检查点。
     document.addEventListener("DOMContentLoaded", () => {
-      bootRetryCount = 0
-      boot("dom-ready")
+      recoverIfFailed()
       scheduleHealthCheck()
       schedulePositionStabilize()
     }, { once: true })

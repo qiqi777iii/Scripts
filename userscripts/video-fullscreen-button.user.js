@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频全屏按钮
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.9
+// @version      1.2.10
 // @description  检测网页视频，点击按钮后自动播放并切换为全屏。
 // @author       Scripting Agent
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js
@@ -57,6 +57,9 @@
     observedVideos: [],
     pendingRefreshFlags: 0,
     refreshScheduled: false,
+    refreshFrame: null,
+    refreshFallbackTimer: null,
+    refreshToken: 0,
   };
 
   function log(...args) {
@@ -476,11 +479,28 @@
     }, delay);
   }
 
+  function cancelPendingRefreshSchedule() {
+    state.refreshToken += 1;
+    if (state.refreshFrame != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(state.refreshFrame);
+    if (state.refreshFallbackTimer != null) clearTimeout(state.refreshFallbackTimer);
+    state.refreshFrame = null;
+    state.refreshFallbackTimer = null;
+    state.refreshScheduled = false;
+  }
+
   function requestRefresh(flags = REFRESH_FULL) {
     state.pendingRefreshFlags |= flags;
     if ((document.hidden && INSTANCE.phase !== "starting") || state.refreshScheduled) return;
     state.refreshScheduled = true;
+    const token = ++state.refreshToken;
+    let completed = false;
     const run = () => {
+      if (completed || token !== state.refreshToken) return;
+      completed = true;
+      if (state.refreshFrame != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(state.refreshFrame);
+      if (state.refreshFallbackTimer != null) clearTimeout(state.refreshFallbackTimer);
+      state.refreshFrame = null;
+      state.refreshFallbackTimer = null;
       state.refreshScheduled = false;
       const currentFlags = state.pendingRefreshFlags;
       state.pendingRefreshFlags = 0;
@@ -514,8 +534,12 @@
         scheduleRefreshRetry();
       }
     };
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
-    else setTimeout(run, 16);
+    if (typeof requestAnimationFrame === "function") {
+      state.refreshFrame = requestAnimationFrame(run);
+      state.refreshFallbackTimer = setTimeout(run, 240);
+    } else {
+      state.refreshFallbackTimer = setTimeout(run, 16);
+    }
   }
 
   function installSharedHistoryHook() {
@@ -556,6 +580,11 @@
 
   function recoverRefresh() {
     state.refreshRetryCount = 0;
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+    }
+    cancelPendingRefreshSchedule();
     requestRefresh(REFRESH_FULL);
   }
 
@@ -602,6 +631,8 @@
   }
 
   INSTANCE.resume = resume;
+  installLifecycleListenersOnce();
   init();
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => requestRefresh(REFRESH_FULL), { once: true });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", recoverRefresh, { once: true });
+  if (document.readyState !== "complete") window.addEventListener("load", recoverRefresh, { once: true });
 })();

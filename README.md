@@ -16,6 +16,7 @@
 | 悬浮工具栏 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js) |
 | 磁力链验车 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/magnet-link-checker.user.js) |
 | MissAV Plyr 本地样式修复 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/missav-plyr-local-style.user.js) |
+| MissAV浏览记录 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/missav-browsing-history.user.js) |
 | 新标签页打开 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js) |
 | 翻页工具 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js) |
 | 标签页检查 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/tab-checker.user.js) |

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.8.5
+// @version      1.8.6
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，控制链接是否在 Safari 新标签页中打开并直接跳转。
@@ -105,6 +105,8 @@
     let refreshRetryCount = 0;
     let pendingRefreshFlags = 0;
     let refreshFrame = null;
+    let refreshFallbackTimer = null;
+    let refreshToken = 0;
     // 页面内临时位置；刷新页面后变量会重建并恢复默认位置。
     let savedPosition = null;
     let dragging = false;
@@ -297,11 +299,6 @@
         });
     }
 
-    function nextFrame(fn) {
-        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
-        else setTimeout(fn, 16);
-    }
-
     const REFRESH_STRUCTURE = 1;
     const REFRESH_CONTENT = 2;
     const REFRESH_LAYOUT = 4;
@@ -317,11 +314,26 @@
         }, delay);
     }
 
+    function cancelPendingRefreshSchedule() {
+        refreshToken += 1;
+        if (refreshFrame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(refreshFrame);
+        if (refreshFallbackTimer != null) clearTimeout(refreshFallbackTimer);
+        refreshFrame = null;
+        refreshFallbackTimer = null;
+    }
+
     function requestRefresh(flags = REFRESH_FULL) {
         pendingRefreshFlags |= flags;
-        if ((document.hidden && INSTANCE.phase !== 'starting') || refreshFrame != null) return;
+        if ((document.hidden && INSTANCE.phase !== 'starting') || refreshFrame != null || refreshFallbackTimer != null) return;
+        const token = ++refreshToken;
+        let completed = false;
         const run = function () {
+            if (completed || token !== refreshToken) return;
+            completed = true;
+            if (refreshFrame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(refreshFrame);
+            if (refreshFallbackTimer != null) clearTimeout(refreshFallbackTimer);
             refreshFrame = null;
+            refreshFallbackTimer = null;
             const currentFlags = pendingRefreshFlags;
             pendingRefreshFlags = 0;
             const root = document.documentElement || document.body;
@@ -357,8 +369,12 @@
                 scheduleRefreshRetry();
             }
         };
-        nextFrame(run);
-        refreshFrame = true;
+        if (typeof requestAnimationFrame === 'function') {
+            refreshFrame = requestAnimationFrame(run);
+            refreshFallbackTimer = setTimeout(run, 240);
+        } else {
+            refreshFallbackTimer = setTimeout(run, 16);
+        }
     }
 
     function findLinkTarget(target) {
@@ -884,12 +900,17 @@
 
     function schedulePositionStabilize() {
         // 滞后已有待处理的布局刷新时直接短路，iOS 滞后滚动中不重复进入调度。
-        if (refreshFrame != null && (pendingRefreshFlags & REFRESH_LAYOUT)) return;
+        if ((refreshFrame != null || refreshFallbackTimer != null) && (pendingRefreshFlags & REFRESH_LAYOUT)) return;
         requestRefresh(REFRESH_LAYOUT);
     }
 
     function recoverRefresh() {
         refreshRetryCount = 0;
+        if (initRetryTimer) {
+            clearTimeout(initRetryTimer);
+            initRetryTimer = null;
+        }
+        cancelPendingRefreshSchedule();
         requestRefresh(REFRESH_FULL);
     }
 
@@ -964,7 +985,10 @@
         window.addEventListener('click', handleLinkClick);
 
         // document-start 先创建基础按钮；GM 状态读取完成后只刷新开关外观，避免存储延迟阻塞 UI。
+        installPositionListenersOnce();
         requestRefresh(REFRESH_FULL);
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', recoverRefresh, { once: true });
+        if (document.readyState !== 'complete') window.addEventListener('load', recoverRefresh, { once: true });
         await loadEnabledState();
         requestRefresh(REFRESH_CONTENT);
         installEnabledStateListener();
@@ -972,8 +996,7 @@
 
     INSTANCE.resume = function () {
         try {
-            refreshRetryCount = 0;
-            requestRefresh(REFRESH_FULL);
+            recoverRefresh();
         } catch (_) {
             INSTANCE.phase = 'failed';
             scheduleEnsureToolbar();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.9
+// @version      1.6.10
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
@@ -58,6 +58,9 @@
     listenersInstalled: false,
     pendingRefreshFlags: 0,
     refreshScheduled: false,
+    refreshFrame: null,
+    refreshFallbackTimer: null,
+    refreshToken: 0,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -474,11 +477,28 @@
     }, delay);
   }
 
+  function cancelPendingRefreshSchedule() {
+    state.refreshToken += 1;
+    if (state.refreshFrame != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(state.refreshFrame);
+    if (state.refreshFallbackTimer != null) clearTimeout(state.refreshFallbackTimer);
+    state.refreshFrame = null;
+    state.refreshFallbackTimer = null;
+    state.refreshScheduled = false;
+  }
+
   function requestRefresh(flags = REFRESH_FULL) {
     state.pendingRefreshFlags |= flags;
     if ((document.hidden && INSTANCE.phase !== "starting") || state.refreshScheduled) return;
     state.refreshScheduled = true;
+    const token = ++state.refreshToken;
+    let completed = false;
     const run = () => {
+      if (completed || token !== state.refreshToken) return;
+      completed = true;
+      if (state.refreshFrame != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(state.refreshFrame);
+      if (state.refreshFallbackTimer != null) clearTimeout(state.refreshFallbackTimer);
+      state.refreshFrame = null;
+      state.refreshFallbackTimer = null;
       state.refreshScheduled = false;
       const currentFlags = state.pendingRefreshFlags;
       state.pendingRefreshFlags = 0;
@@ -510,12 +530,21 @@
         scheduleRefreshRetry();
       }
     };
-    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
-    else setTimeout(run, 16);
+    if (typeof requestAnimationFrame === "function") {
+      state.refreshFrame = requestAnimationFrame(run);
+      state.refreshFallbackTimer = setTimeout(run, 240);
+    } else {
+      state.refreshFallbackTimer = setTimeout(run, 16);
+    }
   }
 
   function recoverRefresh() {
     state.refreshRetryCount = 0;
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+    }
+    cancelPendingRefreshSchedule();
     requestRefresh(REFRESH_FULL);
   }
 
@@ -556,8 +585,10 @@
   }
 
   INSTANCE.resume = resume;
+  installListenersOnce();
   init();
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => requestRefresh(REFRESH_FULL), { once: true });
+    document.addEventListener("DOMContentLoaded", recoverRefresh, { once: true });
   }
+  if (document.readyState !== "complete") window.addEventListener("load", recoverRefresh, { once: true });
 })();
