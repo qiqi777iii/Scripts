@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频封面预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.4.1
+// @version      1.4.3
 // @description  单击视频封面播放静音预览，再次点击进入详情。
 // @match        *://*/*
 // @grant        none
@@ -35,6 +35,7 @@
 
     let active = null;
     let gesture = null;
+    let activeSwipe = null;
     let compatClickGuard = null;
     let passThroughClickGuard = null;
     let lastScrollAt = 0;
@@ -97,7 +98,33 @@
         }
     }
 
+    function resolveXVideosPreviewUrl(card) {
+        if (!IS_XVIDEOS || !card?.matches?.('.thumb-block:not(.thumb-ad)')) return null;
+        const image = card.querySelector('.thumb-inside .thumb img, .thumb img, img');
+        const imageUrl = normalizeMediaUrl(
+            image?.currentSrc ||
+            image?.getAttribute('src') ||
+            image?.getAttribute('data-src') ||
+            image?.getAttribute('data-lazy-src')
+        );
+        if (!imageUrl) return null;
+        try {
+            const url = new URL(imageUrl);
+            if (!/(^|\.)xvideos-cdn\.com$/i.test(url.hostname)) return null;
+            if (!/\/[^/]+\/\d+\/[^/]+\.(?:jpe?g|webp)(?:$|[?#])/i.test(url.href)) return null;
+            url.pathname = url.pathname.replace(/\/[^/]+$/, '/preview.mp4');
+            url.search = '';
+            url.hash = '';
+            return url.href;
+        } catch (_) {
+            return null;
+        }
+    }
+
     function resolvePreviewUrl(card) {
+        const xvideosUrl = resolveXVideosPreviewUrl(card);
+        if (xvideosUrl) return xvideosUrl;
+
         const epornerUrl = resolveEpornerPreviewUrl(card);
         if (epornerUrl) return epornerUrl;
 
@@ -161,7 +188,8 @@
         if (!(card instanceof Element)) return null;
         let link = null;
         if (IS_XVIDEOS && card.matches('.thumb-block:not(.thumb-ad)')) {
-            link = card.querySelector('.thumb-inside .thumb img[data-pvv]')?.closest('a[href]');
+            link = card.querySelector('.thumb-inside .thumb img')?.closest('a[href]') ||
+                card.querySelector('.thumb-inside .thumb a[href], .thumb a[href], a[href]');
         } else if (IS_EPORNER && card.matches('.mb')) {
             link = card.querySelector('.mbcontent > a[href], .mbimg a[href], .mbtit > a[href]');
         } else if (IS_PORNHUB && card.matches('li[data-video-vkey], li[data-video-id]')) {
@@ -195,7 +223,7 @@
 
         if (IS_XVIDEOS) {
             card = safeClosest(target, '.thumb-block:not(.thumb-ad)');
-            if (card?.querySelector('.thumb-inside .thumb img[data-pvv]') && isPreviewCapableCard(card)) return card;
+            if (card?.querySelector('.thumb-inside .thumb img, .thumb img') && isPreviewCapableCard(card)) return card;
         }
 
         card = safeClosest(target, 'li[data-video-vkey], li[data-video-id]');
@@ -773,9 +801,18 @@
         compatClickGuard = null;
         passThroughClickGuard = null;
         nativeTouchCard = null;
+        activeSwipe = null;
         if (event.isTrusted !== true || event.touches.length !== 1) {
             gesture = null;
             return;
+        }
+        const point = event.touches[0];
+        if (active) {
+            activeSwipe = {
+                x: point.clientX,
+                y: point.clientY,
+                scrollY: window.scrollY,
+            };
         }
         const epornerCard = IS_EPORNER ? safeClosest(event.target, '.mb[data-id][data-vp]') : null;
         if (epornerCard) {
@@ -788,7 +825,6 @@
             if (epornerCard) event.stopImmediatePropagation();
             return;
         }
-        const point = event.touches[0];
         const now = Date.now();
         gesture = {
             card,
@@ -808,6 +844,15 @@
     }, { capture: true, passive: true });
 
     window.addEventListener('touchmove', function (event) {
+        if (activeSwipe && event.touches.length === 1) {
+            const point = event.touches[0];
+            const fingerDistance = Math.hypot(point.clientX - activeSwipe.x, point.clientY - activeSwipe.y);
+            const pageDistance = Math.abs(window.scrollY - activeSwipe.scrollY);
+            if (fingerDistance >= SWIPE_CANCEL_DISTANCE || pageDistance >= SWIPE_CANCEL_DISTANCE) {
+                activeSwipe = null;
+                stopActive();
+            }
+        }
         if (IS_EPORNER && nativeTouchCard && !gesture?.secondTap) {
             stopEpornerNativePreview();
             event.stopImmediatePropagation();
@@ -828,6 +873,7 @@
         const origin = gesture;
         const nativeOrigin = nativeTouchCard;
         gesture = null;
+        activeSwipe = null;
         nativeTouchCard = null;
         if (IS_EPORNER && nativeOrigin && !origin?.secondTap) {
             stopEpornerNativePreview();
@@ -861,6 +907,7 @@
     window.addEventListener('touchcancel', function (event) {
         if (gesture?.card) guardCompatibilityClick(gesture.card);
         gesture = null;
+        activeSwipe = null;
         if (IS_EPORNER && nativeTouchCard) {
             stopEpornerNativePreview();
             event.stopImmediatePropagation();

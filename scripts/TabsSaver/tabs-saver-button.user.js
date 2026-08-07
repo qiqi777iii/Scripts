@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.4.1
+// @version 2.6.0
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
-// @run-at document-start
+// @run-at document-end
 // @grant Scripting.FileManager
 // @grant Scripting.tabs
 // @grant GM.closeTab
@@ -13,13 +13,30 @@
 
 (() => {
   const INSTANCE_KEY = "__tabsSaverButtonInstanceV1__"
+  // 旧实例的闭包可能已随页面重写失效；resume 抛错或未确认成功时必须继续完整启动，
+  // 否则这次注入会直接 return，页面上再没有任何调度器，只能靠用户手动刷新。
   const previousInstance = document[INSTANCE_KEY]
   if (previousInstance?.resume) {
-    previousInstance.resume("reinjected")
-    return
+    let resumed = false
+    try {
+      resumed = previousInstance.resume("reinjected") === true
+    } catch (_) {
+      resumed = false
+    }
+    if (resumed) return
+    try { document[INSTANCE_KEY] = null } catch (_) {}
   }
   const INSTANCE = { phase: "starting", resume: null }
   document[INSTANCE_KEY] = INSTANCE
+  const ACCESSORIES_CHANGE_EVENT = "floating-accessories-change"
+  // 有界存在性校验：健康即提前停止，全程不使用常驻轮询。
+  // 各脚本只分叉这一组参数，校验逻辑本身保持五份同构。
+  // 收藏按钮靠邻居（__tb__ / 悬浮工具栏）几何定位，而邻居脚本可能晚于自己加载，
+  // 因此需要比其他脚本更长的尾窗口，确保拼接位置最终能收敛。
+  const PRESENCE_PROFILE = {
+    delays: [0, 150, 400, 900, 1800, 3500, 6000],
+    probeEvents: ["pointerdown", "touchstart", "scroll"],
+  }
   const WRAP_ID = "tab-save-toolbar"
   const BUTTON_ID = "tab-save-button"
   const PICKER_ID = "tab-save-picker"
@@ -75,6 +92,12 @@
   let observedNeighbor = null
   let bootRetryTimer = null
   let bootRetryCount = 0
+  let wakeRecoveryTimers = []
+  let presenceTimers = []
+  let idleProbeInstalled = false
+  let lastBroadcastVisible = null
+  let styleRebuildCount = 0
+  const STYLE_REBUILD_LIMIT = 3
   let lastLayout = null
   let layoutStabilizeTimer = null
   const LAYOUT_STABILIZE_DELAY = 120
@@ -673,13 +696,18 @@
       const currentFlags = pendingRefreshFlags
       pendingRefreshFlags = 0
       try {
-        if (currentFlags & REFRESH_STRUCTURE) ensureButtonHealthy()
+        if (currentFlags & REFRESH_STRUCTURE) {
+          ensureButtonHealthy()
+          broadcastAccessoryState()
+        }
         if (currentFlags & REFRESH_CONTENT) void refreshSavedVisual()
         if (currentFlags & REFRESH_LAYOUT) {
-          if (!wrap || dragging) return
-          if (savedPosition) applySavedPosition()
-          else applyDefaultPosition()
-          refreshConnectedVisual()
+          // 早期 return 会跳过后续收尾；改为条件包裹。
+          if (wrap && !dragging) {
+            if (savedPosition) applySavedPosition()
+            else applyDefaultPosition()
+            refreshConnectedVisual()
+          }
         }
       } catch (_) {
         INSTANCE.phase = "failed"
@@ -819,6 +847,17 @@
     try { window[SHARED_HISTORY_HOOK_KEY] = { version: 2, eventName: SHARED_URL_CHANGE_EVENT, wrappers, handlers, sequence: Number(marker?.sequence || 0) } } catch (_) {}
   }
 
+  // iOS 从后台恢复时，网站可能在唤醒事件之后才重建 DOM；用有限恢复脉冲覆盖该窗口。
+  function scheduleWakeRecovery() {
+    for (const timer of wakeRecoveryTimers) clearTimeout(timer)
+    wakeRecoveryTimers = []
+    const run = () => {
+      if (!document.hidden) recoverIfFailed()
+    }
+    run()
+    for (const delay of [120, 450, 1200]) wakeRecoveryTimers.push(setTimeout(run, delay))
+  }
+
   function installPositionListeners() {
     if (globalListenersInstalled) return
     globalListenersInstalled = true
@@ -828,13 +867,95 @@
     window.visualViewport?.addEventListener("resize", schedulePositionStabilize)
     window.visualViewport?.addEventListener("scroll", schedulePositionStabilize, { passive: true })
     window.addEventListener(SHARED_URL_CHANGE_EVENT, () => requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT))
-    window.addEventListener("pageshow", recoverIfFailed)
-    window.addEventListener("focus", recoverIfFailed)
+    // 相邻悬浮组件出现/消失时确定性地重新收敛拼接，不再只依赖 MutationObserver 启发式命中。
+    window.addEventListener(ACCESSORIES_CHANGE_EVENT, event => {
+      if (event?.detail?.id === WRAP_ID) return
+      invalidateLayoutCache()
+      requestRefresh(REFRESH_LAYOUT)
+    })
+    window.addEventListener("pageshow", scheduleWakeRecovery)
+    window.addEventListener("focus", scheduleWakeRecovery)
     window.addEventListener("load", recoverIfFailed, { once: true })
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) recoverIfFailed()
+      if (!document.hidden) scheduleWakeRecovery()
     })
     try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => requestRefresh(REFRESH_LAYOUT)) } catch (_) {}
+  }
+
+  // 节点存在不等于真的可见：站点样式可能把它压成零尺寸或隐藏。
+  function elementVisible(element) {
+    if (!element?.isConnected) return false
+    const rect = element.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return false
+    const style = getComputedStyle(element)
+    return style.display !== "none" && style.visibility !== "hidden"
+  }
+
+  function buttonPresent() {
+    const currentWrap = document.getElementById(WRAP_ID)
+    const currentButton = document.getElementById(BUTTON_ID)
+    if (currentWrap !== wrap || currentButton !== button) return false
+    if (!currentWrap || !currentButton || currentButton.parentElement !== currentWrap) return false
+    // 重建上限用尽后不再把“不可见”当作缺失，避免站点永久隐藏时反复重启。
+    if (styleRebuildCount >= STYLE_REBUILD_LIMIT) return currentWrap.isConnected
+    return elementVisible(currentWrap)
+  }
+
+  // 进入 running 后也可能被站点静默移除（不会抛异常，退避重试不会触发）；
+  // 用一组有界延时校验覆盖慢站点与 SPA 二次渲染窗口，确认健康即提前停止。
+  function cancelPresenceChecks() {
+    for (const timer of presenceTimers) clearTimeout(timer)
+    presenceTimers = []
+  }
+
+  function schedulePresenceChecks() {
+    cancelPresenceChecks()
+    for (const delay of PRESENCE_PROFILE.delays) {
+      presenceTimers.push(setTimeout(() => {
+        if (document.hidden) return
+        if (buttonPresent()) {
+          // 节点健康不等于位置健康：邻居可能刚刚才插入，
+          // 校验窗口内顺带确认一次拼接是否已收敛。
+          if (neighborPending()) {
+            requestRefresh(REFRESH_LAYOUT)
+            return
+          }
+          cancelPresenceChecks()
+          return
+        }
+        boot("presence")
+      }, delay))
+    }
+  }
+
+  // 邻居已在页面上但本按钮还没与它贴合时，视为位置尚未收敛。
+  // 用户手动拖过位置（savedPosition）或正在拖拽时不得介入，否则会把按钮拉回邻居旁。
+  function neighborPending() {
+    if (!wrap?.isConnected || dragging || savedPosition) return false
+    const neighbor = document.getElementById(NEW_TAB_TOOLBAR_ID) || document.getElementById(FLOATING_TOOLBAR_ID)
+    if (!neighbor || !elementVisible(neighbor)) return false
+    return !controlsAreAdjacent(wrap, neighbor)
+  }
+
+  // 用户真正看到页面的那一刻必查一次；once 监听，几乎无开销。
+  function installIdleProbeOnce() {
+    if (idleProbeInstalled) return
+    idleProbeInstalled = true
+    const probe = () => {
+      if (!document.hidden && !buttonPresent()) boot("probe")
+    }
+    const options = { once: true, passive: true, capture: true }
+    for (const type of PRESENCE_PROFILE.probeEvents) window.addEventListener(type, probe, options)
+  }
+
+  // 自身可见性变化时广播，让相邻组件确定性地重新收敛拼接位置。
+  function broadcastAccessoryState() {
+    const visible = buttonPresent()
+    if (lastBroadcastVisible === visible) return
+    lastBroadcastVisible = visible
+    try {
+      window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: WRAP_ID, visible } }))
+    } catch (_) {}
   }
 
   // 重试上限用完后不再有自动唤醒；这些事件在页面重新可见/获得焦点时兜底重新启动。
@@ -845,11 +966,12 @@
       bootRetryTimer = null
     }
     cancelPendingRefreshSchedule()
-    if (INSTANCE.phase === "failed") {
+    if (INSTANCE.phase === "failed" || !buttonPresent()) {
       boot("recover")
       return
     }
     requestRefresh(REFRESH_FULL)
+    schedulePresenceChecks()
   }
 
   function ensureButtonHealthy() {
@@ -859,7 +981,12 @@
     const currentWrap = document.getElementById(WRAP_ID)
     const currentButton = document.getElementById(BUTTON_ID)
     const owned = currentWrap === wrap && currentButton === button
-    if (!owned || !currentWrap || !currentButton || currentButton.parentElement !== currentWrap || !currentWrap.isConnected) {
+    // 节点在但被站点样式压成零尺寸/隐藏时也视为不健康，否则永远不会重建。
+    // 重建次数设上限：若站点持续隐藏它，不能因 DOM 变动回流而无限重建。
+    const styleBroken = Boolean(currentWrap?.isConnected) && !elementVisible(currentWrap) && styleRebuildCount < STYLE_REBUILD_LIMIT
+    if (styleBroken) styleRebuildCount++
+    else if (elementVisible(currentWrap)) styleRebuildCount = 0
+    if (styleBroken || !owned || !currentWrap || !currentButton || currentButton.parentElement !== currentWrap || !currentWrap.isConnected) {
       currentWrap?.remove?.()
       if (wrap && wrap !== currentWrap) wrap.remove?.()
       wrap = null
@@ -1004,6 +1131,9 @@
         bootRetryTimer = null
       }
       INSTANCE.phase = "running"
+      installIdleProbeOnce()
+      schedulePresenceChecks()
+      broadcastAccessoryState()
       return true
     } catch (_) {
       INSTANCE.phase = "failed"
@@ -1019,7 +1149,7 @@
   }
   boot("initial")
   if (document.readyState === "loading") {
-    // 按钮不依赖 body，立即创建；DOMContentLoaded 只作为额外健康检查点。
+    // 在页面 DOM 构建完成后创建，避免站点初始化阶段重写根节点时清掉按钮。
     document.addEventListener("DOMContentLoaded", () => {
       recoverIfFailed()
       scheduleHealthCheck()
