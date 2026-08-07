@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.6.0
+// @version 2.6.5
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -28,46 +28,25 @@
   }
   const INSTANCE = { phase: "starting", resume: null }
   document[INSTANCE_KEY] = INSTANCE
-  const ACCESSORIES_CHANGE_EVENT = "floating-accessories-change"
-  // 有界存在性校验：健康即提前停止，全程不使用常驻轮询。
-  // 各脚本只分叉这一组参数，校验逻辑本身保持五份同构。
-  // 收藏按钮靠邻居（__tb__ / 悬浮工具栏）几何定位，而邻居脚本可能晚于自己加载，
-  // 因此需要比其他脚本更长的尾窗口，确保拼接位置最终能收敛。
+  // 收藏按钮独立固定在右下角，不读取或跟随其他悬浮工具栏。
   const PRESENCE_PROFILE = {
-    delays: [0, 150, 400, 900, 1800, 3500, 6000],
-    probeEvents: ["pointerdown", "touchstart", "scroll"],
+    delays: [150, 500, 1500, 4000],
+    probeEvents: ["pointerdown", "touchstart"],
   }
   const WRAP_ID = "tab-save-toolbar"
   const BUTTON_ID = "tab-save-button"
   const PICKER_ID = "tab-save-picker"
   const TOAST_ID = "tab-save-toast"
   const DIALOG_ID = "tab-save-dialog"
+  const STYLE_ID = "tab-save-style"
   const SHARED_URL_CHANGE_EVENT = "scripts:urlchange"
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__"
   const STORE_FILE_NAME = "tabs-saver-store.json"
   const DEFAULT_GROUP_NAME = "默认"
   const BTN_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40
 
-  // 收藏按钮默认放在“新标签页打开”按钮左侧；其未加载时再放到悬浮工具栏左侧。
-  const NEW_TAB_TOOLBAR_ID = "__tb__"
-  const FLOATING_TOOLBAR_ID = "universal-pagination-floating-menu"
-  const INITIAL_GAP = 0
-  const CONNECT_OVERLAP = 1
-  const FALLBACK_RIGHT = 234
+  const RIGHT_GAP = 60
   const BOTTOM_GAP = 40
-
-  function hasBottomAnchor(element) {
-    if (!element) return false
-    const inlineBottom = element.style?.bottom
-    const inlineTop = element.style?.top
-    if (inlineBottom && inlineBottom !== "auto" && (!inlineTop || inlineTop === "auto")) return true
-    try {
-      const computed = getComputedStyle(element)
-      return computed.bottom !== "auto" && computed.top === "auto"
-    } catch (_) {
-      return false
-    }
-  }
 
   let wrap = null
   let button = null
@@ -84,24 +63,25 @@
   let rootObserver = null
   let observedRoot = null
   let observedBody = null
+  let observedWrap = null
   let headObserver = null
   let observedHead = null
   let globalListenersInstalled = false
-  let neighborResizeObserver = null
-  let neighborMutationObserver = null
-  let observedNeighbor = null
   let bootRetryTimer = null
   let bootRetryCount = 0
-  let wakeRecoveryTimers = []
   let presenceTimers = []
-  let idleProbeInstalled = false
-  let lastBroadcastVisible = null
-  let styleRebuildCount = 0
-  const STYLE_REBUILD_LIMIT = 3
+  let recoveryProbeInstalled = false
+  let lastProbeAt = 0
+  let lastFullProbeAt = 0
+  let recoveryAttempts = []
+  let recoveryCooldownUntil = 0
+  const RECOVERY_WINDOW = 30000
+  const RECOVERY_LIMIT = 5
+  const RECOVERY_COOLDOWN = 10000
   let lastLayout = null
   let layoutStabilizeTimer = null
   const LAYOUT_STABILIZE_DELAY = 120
-  const BOOT_RETRY_DELAYS = [30, 120, 500, 1500, 3000, 6000]
+  const BOOT_RETRY_DELAYS = [100, 500, 1500, 4000]
 
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
@@ -496,16 +476,15 @@
   }
 
   function injectCSS() {
-    const existingStyle = document.getElementById("tab-save-style")
+    const existingStyle = document.getElementById(STYLE_ID)
     if (existingStyle === styleElement && styleElement?.isConnected) return
     existingStyle?.remove?.()
     if (styleElement && styleElement !== existingStyle) styleElement.remove?.()
     const style = document.createElement("style")
-    style.id = "tab-save-style"
+    style.id = STYLE_ID
     style.textContent = `
 #${WRAP_ID}{position:fixed;left:0;top:0;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;}
 #${BUTTON_ID}{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:#F2F2F7;color:rgba(28,28,30,.82);border:0;box-shadow:inset 0 0 0 .5px var(--combined-separator);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,border-radius .12s ease;}
-#${BUTTON_ID}[data-connected-right="true"]{border-radius:999px 0 0 999px;box-shadow:inset .5px 0 0 var(--combined-separator),inset 0 .5px 0 var(--combined-separator),inset 0 -.5px 0 var(--combined-separator);}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
 #${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:#E5E5EA;}
 #${TOAST_ID}{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.76);color:white;font:14px/18px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .2s;pointer-events:none;}
@@ -595,76 +574,10 @@
     return true
   }
 
-  function controlsAreAdjacent(leftControl, rightControl) {
-    if (!leftControl?.isConnected || !rightControl?.isConnected) return false
-    const leftRect = leftControl.getBoundingClientRect()
-    const rightRect = rightControl.getBoundingClientRect()
-    return leftRect.width > 0 && leftRect.height > 0 && rightRect.width > 0 && rightRect.height > 0 &&
-      Math.abs(leftRect.right - rightRect.left) <= 1.5 && Math.abs(leftRect.top - rightRect.top) <= 1.5
-  }
-
-  function refreshConnectedVisual() {
-    if (!button?.isConnected || !wrap?.isConnected) return
-    const newTabToolbar = document.getElementById(NEW_TAB_TOOLBAR_ID)
-    const floatingToolbar = document.getElementById(FLOATING_TOOLBAR_ID)
-    // 无相邻组件时不必读取几何信息。
-    const connectedToNewTab = newTabToolbar ? controlsAreAdjacent(wrap, newTabToolbar) : false
-    const connectedToFloating = !connectedToNewTab && floatingToolbar ? controlsAreAdjacent(wrap, floatingToolbar) : false
-    const connectedRight = (connectedToNewTab || connectedToFloating) ? "true" : "false"
-    if (button.dataset.connectedRight !== connectedRight) button.dataset.connectedRight = connectedRight
-    const newTabButton = document.getElementById("__tb_btn__")
-    if (newTabButton) {
-      const value = connectedToNewTab ? "true" : "false"
-      if (newTabButton.dataset.connectedLeft !== value) newTabButton.dataset.connectedLeft = value
-    }
-    if (floatingToolbar && !newTabToolbar) {
-      const value = connectedToFloating ? "true" : "false"
-      if (floatingToolbar.dataset.connectedLeft !== value) floatingToolbar.dataset.connectedLeft = value
-    }
-  }
-
-  function observeNeighbor(neighbor) {
-    if (observedNeighbor === neighbor) return
-    neighborResizeObserver?.disconnect()
-    neighborMutationObserver?.disconnect()
-    observedNeighbor = neighbor || null
-    if (!neighbor) return
-    if (typeof ResizeObserver === "function") {
-      neighborResizeObserver = new ResizeObserver(schedulePositionStabilize)
-      neighborResizeObserver.observe(neighbor)
-    }
-    if (typeof MutationObserver === "function") {
-      neighborMutationObserver = new MutationObserver(schedulePositionStabilize)
-      neighborMutationObserver.observe(neighbor, {
-        attributes: true,
-        attributeFilter: ["style", "class", "hidden"],
-      })
-    }
-  }
-
   function applyDefaultPosition() {
     if (!wrap) return
     const viewport = getViewportBox()
-    const neighbor = document.getElementById(NEW_TAB_TOOLBAR_ID) || document.getElementById(FLOATING_TOOLBAR_ID)
-    observeNeighbor(neighbor)
-    if (neighbor) {
-      const rect = neighbor.getBoundingClientRect()
-      const neighborVisible = rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < viewport.width && rect.bottom > 0 && rect.top < viewport.height
-      if (neighborVisible) {
-        const pos = clampPos(rect.left - INITIAL_GAP - BTN_SIZE + CONNECT_OVERLAP, rect.top)
-        // bottom 锚点只有在当前视口内有效时才沿用；否则使用已限制在视口内的 top。
-        if (hasBottomAnchor(neighbor)) {
-          const computedBottom = parseFloat(getComputedStyle(neighbor).bottom)
-          if (Number.isFinite(computedBottom) && computedBottom >= 0 && computedBottom <= Math.max(0, viewport.height - BTN_SIZE)) {
-            writeLayout(pos.left, null, computedBottom)
-            return
-          }
-        }
-        writeLayout(pos.left, pos.top, null)
-        return
-      }
-    }
-    const left = Math.max(0, Math.floor(viewport.width - BTN_SIZE - FALLBACK_RIGHT))
+    const left = Math.max(0, Math.floor(viewport.width - BTN_SIZE - RIGHT_GAP))
     writeLayout(left, null, BOTTOM_GAP)
   }
 
@@ -698,7 +611,6 @@
       try {
         if (currentFlags & REFRESH_STRUCTURE) {
           ensureButtonHealthy()
-          broadcastAccessoryState()
         }
         if (currentFlags & REFRESH_CONTENT) void refreshSavedVisual()
         if (currentFlags & REFRESH_LAYOUT) {
@@ -706,7 +618,6 @@
           if (wrap && !dragging) {
             if (savedPosition) applySavedPosition()
             else applyDefaultPosition()
-            refreshConnectedVisual()
           }
         }
       } catch (_) {
@@ -847,15 +758,11 @@
     try { window[SHARED_HISTORY_HOOK_KEY] = { version: 2, eventName: SHARED_URL_CHANGE_EVENT, wrappers, handlers, sequence: Number(marker?.sequence || 0) } } catch (_) {}
   }
 
-  // iOS 从后台恢复时，网站可能在唤醒事件之后才重建 DOM；用有限恢复脉冲覆盖该窗口。
+  // iOS 从后台恢复后，立即做一次完整检查，再复用统一的有限结构检查轮次。
   function scheduleWakeRecovery() {
-    for (const timer of wakeRecoveryTimers) clearTimeout(timer)
-    wakeRecoveryTimers = []
-    const run = () => {
-      if (!document.hidden) recoverIfFailed()
-    }
-    run()
-    for (const delay of [120, 450, 1200]) wakeRecoveryTimers.push(setTimeout(run, delay))
+    if (document.hidden) return
+    resetRecoveryBudget()
+    recoverIfFailed()
   }
 
   function installPositionListeners() {
@@ -867,17 +774,16 @@
     window.visualViewport?.addEventListener("resize", schedulePositionStabilize)
     window.visualViewport?.addEventListener("scroll", schedulePositionStabilize, { passive: true })
     window.addEventListener(SHARED_URL_CHANGE_EVENT, () => requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT))
-    // 相邻悬浮组件出现/消失时确定性地重新收敛拼接，不再只依赖 MutationObserver 启发式命中。
-    window.addEventListener(ACCESSORIES_CHANGE_EVENT, event => {
-      if (event?.detail?.id === WRAP_ID) return
-      invalidateLayoutCache()
-      requestRefresh(REFRESH_LAYOUT)
-    })
     window.addEventListener("pageshow", scheduleWakeRecovery)
     window.addEventListener("focus", scheduleWakeRecovery)
-    window.addEventListener("load", recoverIfFailed, { once: true })
+    window.addEventListener("load", scheduleWakeRecovery, { once: true })
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) scheduleWakeRecovery()
+      if (document.hidden) {
+        cancelPresenceChecks()
+        cancelPendingRefreshSchedule()
+        return
+      }
+      scheduleWakeRecovery()
     })
     try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => requestRefresh(REFRESH_LAYOUT)) } catch (_) {}
   }
@@ -888,77 +794,86 @@
     const rect = element.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return false
     const style = getComputedStyle(element)
-    return style.display !== "none" && style.visibility !== "hidden"
+    return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && style.position === "fixed"
   }
 
-  function buttonPresent() {
+  // 绝大多数检查只核对固定引用和父子关系，不读取布局。
+  function buttonStructurePresent() {
     const currentWrap = document.getElementById(WRAP_ID)
     const currentButton = document.getElementById(BUTTON_ID)
-    if (currentWrap !== wrap || currentButton !== button) return false
-    if (!currentWrap || !currentButton || currentButton.parentElement !== currentWrap) return false
-    // 重建上限用尽后不再把“不可见”当作缺失，避免站点永久隐藏时反复重启。
-    if (styleRebuildCount >= STYLE_REBUILD_LIMIT) return currentWrap.isConnected
-    return elementVisible(currentWrap)
+    const currentStyle = document.getElementById(STYLE_ID)
+    return Boolean(
+      currentWrap && currentButton && currentStyle &&
+      currentWrap === wrap && currentButton === button && currentStyle === styleElement &&
+      currentWrap.isConnected && currentButton.isConnected && currentStyle.isConnected &&
+      currentButton.parentElement === currentWrap
+    )
   }
 
-  // 进入 running 后也可能被站点静默移除（不会抛异常，退避重试不会触发）；
-  // 用一组有界延时校验覆盖慢站点与 SPA 二次渲染窗口，确认健康即提前停止。
+  // 完整检查仅用于首次启动、前台恢复和用户实际触摸页面时。
+  function buttonFullyVisible() {
+    if (!buttonStructurePresent()) return false
+    const rect = wrap.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return false
+    const style = getComputedStyle(wrap)
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0" || style.position !== "fixed") return false
+    const viewport = getViewportBox()
+    return rect.right > 0 && rect.bottom > 0 && rect.left < viewport.width && rect.top < viewport.height
+  }
+
+  // 进入 running 后也可能被站点静默移除；用有限、低成本结构检查覆盖恢复窗口。
   function cancelPresenceChecks() {
     for (const timer of presenceTimers) clearTimeout(timer)
     presenceTimers = []
   }
 
+  // 有限检查不因某次健康而提前取消，避免网站稍后才替换 body。
+  // 每次只做固定 ID 和连接关系检查，不触发布局计算。
   function schedulePresenceChecks() {
     cancelPresenceChecks()
     for (const delay of PRESENCE_PROFILE.delays) {
       presenceTimers.push(setTimeout(() => {
-        if (document.hidden) return
-        if (buttonPresent()) {
-          // 节点健康不等于位置健康：邻居可能刚刚才插入，
-          // 校验窗口内顺带确认一次拼接是否已收敛。
-          if (neighborPending()) {
-            requestRefresh(REFRESH_LAYOUT)
-            return
-          }
-          cancelPresenceChecks()
-          return
-        }
-        boot("presence")
+        if (!document.hidden && !buttonStructurePresent()) boot("presence")
       }, delay))
     }
   }
 
-  // 邻居已在页面上但本按钮还没与它贴合时，视为位置尚未收敛。
-  // 用户手动拖过位置（savedPosition）或正在拖拽时不得介入，否则会把按钮拉回邻居旁。
-  function neighborPending() {
-    if (!wrap?.isConnected || dragging || savedPosition) return false
-    const neighbor = document.getElementById(NEW_TAB_TOOLBAR_ID) || document.getElementById(FLOATING_TOOLBAR_ID)
-    if (!neighbor || !elementVisible(neighbor)) return false
-    return !controlsAreAdjacent(wrap, neighbor)
-  }
-
-  // 用户真正看到页面的那一刻必查一次；once 监听，几乎无开销。
-  function installIdleProbeOnce() {
-    if (idleProbeInstalled) return
-    idleProbeInstalled = true
+  // 永久保留低成本用户操作兜底；500ms 内的 pointer/touch 双事件只处理一次。
+  // 只有用户实际操作页面时才做完整可见性检查，不使用常驻轮询。
+  function installRecoveryProbe() {
+    if (recoveryProbeInstalled) return
+    recoveryProbeInstalled = true
     const probe = () => {
-      if (!document.hidden && !buttonPresent()) boot("probe")
+      if (document.hidden) return
+      const time = now()
+      if (time - lastProbeAt < 500) return
+      lastProbeAt = time
+      if (!buttonStructurePresent()) {
+        resetRecoveryBudget()
+        if (bootRetryTimer) {
+          clearTimeout(bootRetryTimer)
+          bootRetryTimer = null
+        }
+        boot("probe")
+        return
+      }
+      // 正常触摸只做结构检查；完整布局/样式检查最多每 10 秒一次。
+      if (time - lastFullProbeAt < 10000) return
+      lastFullProbeAt = time
+      if (!buttonFullyVisible()) {
+        resetRecoveryBudget()
+        if (bootRetryTimer) {
+          clearTimeout(bootRetryTimer)
+          bootRetryTimer = null
+        }
+        boot("probe")
+      }
     }
-    const options = { once: true, passive: true, capture: true }
+    const options = { passive: true, capture: true }
     for (const type of PRESENCE_PROFILE.probeEvents) window.addEventListener(type, probe, options)
   }
 
-  // 自身可见性变化时广播，让相邻组件确定性地重新收敛拼接位置。
-  function broadcastAccessoryState() {
-    const visible = buttonPresent()
-    if (lastBroadcastVisible === visible) return
-    lastBroadcastVisible = visible
-    try {
-      window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: WRAP_ID, visible } }))
-    } catch (_) {}
-  }
-
-  // 重试上限用完后不再有自动唤醒；这些事件在页面重新可见/获得焦点时兜底重新启动。
+  // 完整恢复只在生命周期或用户触发时执行；随后进入有限结构检查轮次。
   function recoverIfFailed() {
     bootRetryCount = 0
     if (bootRetryTimer) {
@@ -966,11 +881,12 @@
       bootRetryTimer = null
     }
     cancelPendingRefreshSchedule()
-    if (INSTANCE.phase === "failed" || !buttonPresent()) {
+    lastFullProbeAt = now()
+    if (INSTANCE.phase === "failed" || !buttonFullyVisible()) {
       boot("recover")
       return
     }
-    requestRefresh(REFRESH_FULL)
+    requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT)
     schedulePresenceChecks()
   }
 
@@ -981,17 +897,15 @@
     const currentWrap = document.getElementById(WRAP_ID)
     const currentButton = document.getElementById(BUTTON_ID)
     const owned = currentWrap === wrap && currentButton === button
-    // 节点在但被站点样式压成零尺寸/隐藏时也视为不健康，否则永远不会重建。
-    // 重建次数设上限：若站点持续隐藏它，不能因 DOM 变动回流而无限重建。
-    const styleBroken = Boolean(currentWrap?.isConnected) && !elementVisible(currentWrap) && styleRebuildCount < STYLE_REBUILD_LIMIT
-    if (styleBroken) styleRebuildCount++
-    else if (elementVisible(currentWrap)) styleRebuildCount = 0
+    // 节点存在但被站点样式压成零尺寸或隐藏时也重建；不再因失败次数永久放弃。
+    const styleBroken = Boolean(currentWrap?.isConnected) && !elementVisible(currentWrap)
     if (styleBroken || !owned || !currentWrap || !currentButton || currentButton.parentElement !== currentWrap || !currentWrap.isConnected) {
       currentWrap?.remove?.()
       if (wrap && wrap !== currentWrap) wrap.remove?.()
       wrap = null
       button = null
       createButton()
+      startDomGuard()
       void refreshSavedVisual()
       return
     }
@@ -1002,11 +916,12 @@
       parent.appendChild(currentWrap)
       invalidateLayoutCache()
     }
-    // 节点健康不代表位置健康：相邻按钮可能在稍后才出现，必须重新收敛组合顺序。
+    // 节点健康后仍重新应用独立的右下角默认位置。
     schedulePositionStabilize()
   }
 
   function scheduleHealthCheck() {
+    if (INSTANCE.phase === "failed") bootRetryCount = 0
     requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT)
   }
 
@@ -1017,7 +932,7 @@
     headObserver = new MutationObserver(mutations => {
       for (const mutation of mutations) {
         for (const node of mutation.removedNodes) {
-          if (node?.id === "tab-save-style") {
+          if (node?.id === STYLE_ID) {
             scheduleHealthCheck()
             return
           }
@@ -1027,25 +942,16 @@
     headObserver.observe(head, { childList: true })
   }
 
+  // 只判断顶层新增/移除节点本身；不向网页深层 querySelector。
   function mutationTouchesFloatingUi(mutation) {
-    // subtree 监听下变动可能发生在页面任意深度，target 不再局限于顶层容器；
-    // 只按新增/移除节点是否命中悬浮组件选择器判定，避免漏检深层重写。
-    const selector = `#${WRAP_ID}, #${BUTTON_ID}, #tab-save-style, #${NEW_TAB_TOOLBAR_ID}, #${FLOATING_TOOLBAR_ID}`
-    const added = mutation.addedNodes
-    const removed = mutation.removedNodes
-    for (let i = 0; i < added.length; i++) {
-      if (nodeTouchesFloatingUi(added[i], selector)) return true
-    }
-    for (let i = 0; i < removed.length; i++) {
-      if (nodeTouchesFloatingUi(removed[i], selector)) return true
+    if (mutation.target === wrap) return true
+    const nodes = [...mutation.addedNodes, ...mutation.removedNodes]
+    for (const node of nodes) {
+      if (!(node instanceof Element)) continue
+      if (node === wrap || node === button || node.id === WRAP_ID || node.id === BUTTON_ID) return true
+      if (node.tagName === "BODY" || node.tagName === "HEAD") return true
     }
     return false
-  }
-
-  function nodeTouchesFloatingUi(node, selector) {
-    if (!(node instanceof Element)) return false
-    if (node.tagName === "HTML" || node.tagName === "HEAD" || node.tagName === "BODY") return true
-    return Boolean(node.matches?.(selector)) || Boolean(node.querySelector?.(selector))
   }
 
   function startDomGuard() {
@@ -1053,22 +959,39 @@
     if (!root) return
     watchHead(document.head)
     const body = document.body || null
-    if (rootObserver && observedRoot === root && observedBody === body && root.isConnected) return
+    if (rootObserver && observedRoot === root && observedBody === body && observedWrap === wrap && root.isConnected) return
     rootObserver?.disconnect()
     observedRoot = root
     observedBody = body
+    observedWrap = wrap || null
     rootObserver = new MutationObserver(mutations => {
       if (!mutations.some(mutationTouchesFloatingUi)) return
       watchHead(document.head)
       scheduleHealthCheck()
-      schedulePositionStabilize()
     })
-    // 悬浮按钮只会被挂在 documentElement 或 body 的直接子节点上，因此不需要 subtree；
-    // 避免在无限滚动类页面上为每一批内容插入都生成 mutation 记录。
-    // 曾经只观察直接子节点以省性能，但站点在深层重写 DOM（插屏广告、反复重排）时会漏检；
-    // 改用 subtree 以确保按钮被清空后仍能被结构监听捕捉到并重建。
-    rootObserver.observe(root, { childList: true, subtree: true })
-    if (body) rootObserver.observe(body, { childList: true, subtree: true })
+    // 只观察 documentElement、body 和按钮容器的直接子节点。
+    // 无限滚动、评论、广告等深层 DOM 更新不会产生记录。
+    rootObserver.observe(root, { childList: true, subtree: false })
+    if (body) rootObserver.observe(body, { childList: true, subtree: false })
+    if (wrap?.isConnected) rootObserver.observe(wrap, { childList: true, subtree: false })
+  }
+
+  function resetRecoveryBudget() {
+    recoveryAttempts = []
+    recoveryCooldownUntil = 0
+    bootRetryCount = 0
+  }
+
+  function consumeRecoveryBudget() {
+    const time = now()
+    if (time < recoveryCooldownUntil) return false
+    recoveryAttempts = recoveryAttempts.filter(item => time - item < RECOVERY_WINDOW)
+    if (recoveryAttempts.length >= RECOVERY_LIMIT) {
+      recoveryCooldownUntil = time + RECOVERY_COOLDOWN
+      return false
+    }
+    recoveryAttempts.push(time)
+    return true
   }
 
   function createButton() {
@@ -1076,6 +999,7 @@
     const existingButton = document.getElementById(BUTTON_ID)
     const healthy = existingWrap === wrap && existingButton === button && existingButton?.parentElement === existingWrap && existingWrap.isConnected
     if (healthy) return false
+    if (!consumeRecoveryBudget()) return false
     existingWrap?.remove?.()
     if (wrap && wrap !== existingWrap) wrap.remove?.()
     wrap = null
@@ -1085,7 +1009,6 @@
     button = document.createElement("button")
     button.id = BUTTON_ID
     button.type = "button"
-    button.dataset.connectedRight = "false"
     button.setAttribute("aria-label", "收藏并关闭标签页")
     button.innerHTML = bookmarkSVG(false)
     button.addEventListener("pointerdown", onPointerDown)
@@ -1124,16 +1047,14 @@
     try {
       installSharedHistoryHook()
       if (!resumeButtonRuntime(true)) throw new Error("收藏按钮尚未连接")
-      scheduleHealthCheck()
       bootRetryCount = 0
       if (bootRetryTimer) {
         clearTimeout(bootRetryTimer)
         bootRetryTimer = null
       }
       INSTANCE.phase = "running"
-      installIdleProbeOnce()
+      installRecoveryProbe()
       schedulePresenceChecks()
-      broadcastAccessoryState()
       return true
     } catch (_) {
       INSTANCE.phase = "failed"
@@ -1152,8 +1073,6 @@
     // 在页面 DOM 构建完成后创建，避免站点初始化阶段重写根节点时清掉按钮。
     document.addEventListener("DOMContentLoaded", () => {
       recoverIfFailed()
-      scheduleHealthCheck()
-      schedulePositionStabilize()
     }, { once: true })
   }
 })()
