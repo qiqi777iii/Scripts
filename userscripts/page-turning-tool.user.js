@@ -35,7 +35,7 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
   const WIDTH = ITEM_SIZE * 2;
-  const DEFAULT_RIGHT_GAP = 160;
+  const DEFAULT_RIGHT_GAP = 140;
   const DEFAULT_BOTTOM_GAP = 40;
   const SHARED_URL_CHANGE_EVENT = "scripts:urlchange";
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__";

@@ -46,7 +46,7 @@
   const BTN_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40
 
   const RIGHT_GAP = 60
-  const BOTTOM_GAP = 40
+  const BOTTOM_GAP = 85
 
   let wrap = null
   let button = null

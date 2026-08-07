@@ -39,8 +39,8 @@
     const SHARED_ENABLED_KEY_PREFIX = 'newTabEnabledBySite:';
     const SHARED_MODE_KEY_PREFIX = 'newTabModeBySite:';
     const BTN_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
-    const BOTTOM_GAP = 40;
-    const RIGHT_GAP = 200;
+    const BOTTOM_GAP = 85;
+    const RIGHT_GAP = 100;
     const SHARED_URL_CHANGE_EVENT = 'scripts:urlchange';
     const SHARED_HISTORY_HOOK_KEY = '__sharedHistoryHookV1__';
     const COVER_PREVIEW_READY_ATTR = 'data-cover-preview-ready';

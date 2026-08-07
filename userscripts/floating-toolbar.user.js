@@ -36,7 +36,7 @@
   const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
   const SAFE_BOTTOM_GAP = 40;
   const DEFAULT_BOTTOM_GAP = 40;
-  const DEFAULT_RIGHT_GAP = 80;
+  const DEFAULT_RIGHT_GAP = 60;
 
   const state = {
     initialized: false,
