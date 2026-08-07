@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.7.0
+// @version      1.8.0
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
-// @description  自动识别网页上一页和下一页，并在悬浮工具栏右侧显示独立翻页按钮。
+// @description  自动识别网页上一页和下一页，并显示独立悬浮翻页按钮。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -31,25 +31,12 @@
   }
   const INSTANCE = { phase: "starting", resume: null };
   document[INSTANCE_KEY] = INSTANCE;
-  const ACCESSORIES_CHANGE_EVENT = "floating-accessories-change";
-  // 有界存在性校验：健康即提前停止，全程不使用常驻轮询。
-  // 各脚本只分叉这一组参数，校验逻辑本身保持五份同构。
-  // 本脚本的完整刷新会重扫分页 DOM，是五个脚本里成本最高的，
-  // 因此校验次数最稀疏；且发现缺失时只重建结构，不顺带重扫分页。
-  const PRESENCE_PROFILE = {
-    delays: [0, 300, 900, 2500],
-    probeEvents: ["scroll", "pointerdown"],
-  };
-
   const SCRIPT_ID = "floating-page-navigation";
   const STYLE_ID = `${SCRIPT_ID}-style`;
-  const BASE_TOOLBAR_ID = "universal-pagination-floating-menu";
-  const VIDEO_FULLSCREEN_ID = "video-fullscreen";
   const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
-  const CONNECT_OVERLAP = 1;
   const WIDTH = ITEM_SIZE * 2;
-  const DEFAULT_RIGHT_GAP = 16;
-  const DEFAULT_BOTTOM_GAP = 28;
+  const DEFAULT_RIGHT_GAP = 160;
+  const DEFAULT_BOTTOM_GAP = 40;
   const SHARED_URL_CHANGE_EVENT = "scripts:urlchange";
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__";
   const STATE = {
@@ -62,8 +49,6 @@
     styleElement: null,
     prevButton: null,
     nextButton: null,
-    retryTimer: null,
-    refreshRetryCount: 0,
     listenersInstalled: false,
     pagerObserver: null,
     observedPagerRoot: null,
@@ -72,9 +57,6 @@
     idleUsesRequestCallback: false,
     updateInFlight: false,
     updateDirty: false,
-    toolbarObserver: null,
-    toolbarResizeObserver: null,
-    observedToolbar: null,
     hydrationTimer: null,
     hydrationRetried: false,
     pendingRefreshFlags: 0,
@@ -88,10 +70,6 @@
     candidateEpoch: -1,
     mutationScanAt: 0,
     mutationCatchupTimer: null,
-    wakeRecoveryTimers: [],
-    presenceTimers: [],
-    idleProbeInstalled: false,
-    lastBroadcastVisible: null,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -172,7 +150,7 @@
 
   function isOwnUiElement(el) {
     return Boolean(
-      el?.closest?.(`#${SCRIPT_ID}, #${BASE_TOOLBAR_ID}, #${VIDEO_FULLSCREEN_ID}`)
+      el?.closest?.(`#${SCRIPT_ID}`)
     );
   }
 
@@ -664,81 +642,12 @@
     }, 800);
   }
 
-  function controlsAreAdjacent(leftControl, rightControl) {
-    if (!leftControl?.isConnected || !rightControl?.isConnected) return false;
-    const leftRect = leftControl.getBoundingClientRect();
-    const rightRect = rightControl.getBoundingClientRect();
-    return leftRect.width > 0 && leftRect.height > 0 && rightRect.width > 0 && rightRect.height > 0 &&
-      Math.abs(leftRect.right - rightRect.left) <= 1.5 && Math.abs(leftRect.top - rightRect.top) <= 1.5;
-  }
-
-  function setConnectedVisual(box, anchor) {
-    const base = document.getElementById(BASE_TOOLBAR_ID);
-    const fullscreen = document.getElementById(VIDEO_FULLSCREEN_ID);
-    const connectedLeft = Boolean(anchor?.isConnected) && controlsAreAdjacent(anchor, box);
-    const connectedRight = controlsAreAdjacent(box, fullscreen);
-    box.dataset.connectedLeft = connectedLeft ? "true" : "false";
-    box.dataset.connectedRight = connectedRight ? "true" : "false";
-
-    if (base) base.dataset.connectedRight = connectedLeft ? "true" : "false";
-    if (fullscreen) {
-      fullscreen.dataset.connectedLeft = connectedRight ? "true" : "false";
-      fullscreen.dataset.connectedRight = "false";
-    }
-  }
-
-  function refreshConnectedVisual(box) {
-    const base = document.getElementById(BASE_TOOLBAR_ID);
-    setConnectedVisual(box, controlsAreAdjacent(base, box) ? base : null);
-  }
-
-  function observeBaseToolbar(base) {
-    if (STATE.observedToolbar === base) return;
-    STATE.toolbarObserver?.disconnect();
-    STATE.toolbarResizeObserver?.disconnect();
-    STATE.observedToolbar = base || null;
-    if (!base) return;
-    STATE.toolbarObserver = new MutationObserver(schedulePosition);
-    STATE.toolbarObserver.observe(base, { attributes: true, attributeFilter: ["style", "class", "hidden"] });
-    if (typeof ResizeObserver === "function") {
-      STATE.toolbarResizeObserver = new ResizeObserver(schedulePosition);
-      STATE.toolbarResizeObserver.observe(base);
-    }
-  }
-
   function applyPosition(box) {
     if (!box?.isConnected) return;
-    const base = document.getElementById(BASE_TOOLBAR_ID);
-    const anchor = base;
-    observeBaseToolbar(anchor);
-    if (anchor) {
-      const rect = anchor.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        box.style.left = `${rect.right - CONNECT_OVERLAP}px`;
-        box.style.right = "auto";
-        const usesBottom = anchor.style.bottom && anchor.style.bottom !== "auto" && (!anchor.style.top || anchor.style.top === "auto");
-        if (usesBottom) {
-          box.style.bottom = anchor.style.bottom;
-          box.style.top = "auto";
-        } else {
-          box.style.top = `${rect.top}px`;
-          box.style.bottom = "auto";
-        }
-        // 位置由同一锚点直接计算，连接状态也按该锚点同步设置，
-        // 避免两个独立脚本在同一帧交错测量时出现“一边方、一边圆”的短暂错位。
-        setConnectedVisual(box, anchor);
-        return;
-      }
-    }
     box.style.right = `${DEFAULT_RIGHT_GAP}px`;
     box.style.bottom = `${DEFAULT_BOTTOM_GAP}px`;
     box.style.left = "auto";
     box.style.top = "auto";
-    refreshConnectedVisual(box);
-  }
-
-  function schedulePosition() {
-    requestRefresh(REFRESH_LAYOUT);
   }
 
   function addStyles() {
@@ -773,10 +682,6 @@
         touch-action: manipulation;
         transform: translate3d(0,0,0);
       }
-      #${SCRIPT_ID}[data-connected-left="true"] { border-radius: 0 999px 999px 0; box-shadow: inset -.5px 0 0 var(--qpn-separator), inset 0 .5px 0 var(--qpn-separator), inset 0 -.5px 0 var(--qpn-separator); }
-      #${SCRIPT_ID}[data-connected-right="true"] { border-radius: 999px 0 0 999px; box-shadow: inset .5px 0 0 var(--qpn-separator), inset 0 .5px 0 var(--qpn-separator), inset 0 -.5px 0 var(--qpn-separator); }
-      #${SCRIPT_ID}[data-connected-left="true"][data-connected-right="true"] { border-radius: 0; box-shadow: inset 0 .5px 0 var(--qpn-separator), inset 0 -.5px 0 var(--qpn-separator); }
-      #${SCRIPT_ID}[data-connected-left="true"]::before { content: ""; position: absolute; z-index: 2; left: 0; top: 7px; bottom: 7px; width: 1px; background: var(--qpn-separator); pointer-events: none; }
       #${SCRIPT_ID} button {
         box-sizing: border-box;
         position: relative;
@@ -861,8 +766,6 @@
     if (STATE.toolbar && STATE.toolbar !== box) STATE.toolbar.remove?.();
     box = document.createElement("div");
     box.id = SCRIPT_ID;
-    box.dataset.connectedLeft = "false";
-    box.dataset.connectedRight = "false";
     box.setAttribute("role", "toolbar");
     box.setAttribute("aria-label", "上一页下一页");
     box.innerHTML = `
@@ -933,7 +836,7 @@
         clearTimeout(STATE.hydrationTimer);
         STATE.hydrationTimer = null;
       }
-      schedulePosition();
+      applyPosition(box);
     } finally {
       STATE.updateInFlight = false;
       if (STATE.updateDirty) {
@@ -998,12 +901,6 @@
     return false;
   }
 
-  function mutationTouchesLayoutNeighbor(mutation) {
-    const selector = `#${BASE_TOOLBAR_ID}, #${VIDEO_FULLSCREEN_ID}`;
-    return [...mutation.addedNodes, ...mutation.removedNodes].some((node) =>
-      node instanceof Element && (node.matches?.(selector) || node.querySelector?.(selector))
-    );
-  }
 
   function mutationTouchesRelevantUi(mutation) {
     const target = mutation.target instanceof Element ? mutation.target : mutation.target?.parentElement;
@@ -1029,17 +926,6 @@
   const REFRESH_CONTENT = 2;
   const REFRESH_LAYOUT = 4;
   const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT;
-  const REFRESH_RETRY_DELAYS = [120, 300, 700, 1500, 3000, 6000];
-
-  function scheduleRefreshRetry() {
-    if (document.hidden || STATE.retryTimer || STATE.refreshRetryCount >= REFRESH_RETRY_DELAYS.length) return;
-    const delay = REFRESH_RETRY_DELAYS[STATE.refreshRetryCount++];
-    STATE.retryTimer = setTimeout(() => {
-      STATE.retryTimer = null;
-      requestRefresh(REFRESH_FULL, 0);
-    }, delay);
-  }
-
   function cancelPendingRefreshSchedule() {
     STATE.refreshToken += 1;
     if (STATE.refreshFrame != null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(STATE.refreshFrame);
@@ -1073,7 +959,6 @@
       if (!root) {
         STATE.pendingRefreshFlags |= REFRESH_FULL;
         STATE.contentDelay = Math.min(STATE.contentDelay, 0);
-        scheduleRefreshRetry();
         return;
       }
       try {
@@ -1091,19 +976,12 @@
         }
         STATE.initialized = true;
         INSTANCE.phase = "running";
-        STATE.refreshRetryCount = 0;
-        broadcastAccessoryState();
-        if (STATE.retryTimer) {
-          clearTimeout(STATE.retryTimer);
-          STATE.retryTimer = null;
-        }
       } catch (error) {
         STATE.initialized = false;
         INSTANCE.phase = "failed";
         STATE.pendingRefreshFlags |= REFRESH_FULL;
         STATE.contentDelay = Math.min(STATE.contentDelay, 0);
         log("刷新恢复中", error);
-        scheduleRefreshRetry();
       }
     };
 
@@ -1170,71 +1048,17 @@
     return elementVisible(box);
   }
 
-  // 进入 running 后也可能被站点静默移除（不会抛异常，退避重试不会触发）；
-  // 用有界延时校验覆盖慢站点与 SPA 二次渲染窗口，确认健康即提前停止。
-  function cancelPresenceChecks() {
-    STATE.presenceTimers.forEach(clearTimeout);
-    STATE.presenceTimers = [];
-  }
-
-  function schedulePresenceChecks() {
-    cancelPresenceChecks();
-    PRESENCE_PROFILE.delays.forEach((delay) => {
-      STATE.presenceTimers.push(setTimeout(() => {
-        if (document.hidden) return;
-        if (toolbarPresent()) {
-          cancelPresenceChecks();
-          return;
-        }
-        // 只补结构与布局；分页内容扫描由 observer 和已有的 hydration 重试负责，
-        // 避免每次存在性校验都拖一次全页 DOM 扫描。
-        requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT, 0);
-      }, delay));
-    });
-  }
-
-  // 用户真正看到页面的那一刻必查一次；once 监听，几乎无开销。
-  function installIdleProbeOnce() {
-    if (STATE.idleProbeInstalled) return;
-    STATE.idleProbeInstalled = true;
-    const probe = () => {
-      if (!document.hidden && !toolbarPresent()) requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT, 0);
-    };
-    const options = { once: true, passive: true, capture: true };
-    PRESENCE_PROFILE.probeEvents.forEach((type) => window.addEventListener(type, probe, options));
-  }
-
-  // 自身可见性变化时广播，让相邻组件确定性地重新收敛拼接位置。
-  function broadcastAccessoryState() {
-    const visible = toolbarPresent();
-    if (STATE.lastBroadcastVisible === visible) return;
-    STATE.lastBroadcastVisible = visible;
-    try {
-      window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: SCRIPT_ID, visible } }));
-    } catch (_) {}
-  }
 
   function recoverRefresh() {
-    STATE.refreshRetryCount = 0;
-    if (STATE.retryTimer) {
-      clearTimeout(STATE.retryTimer);
-      STATE.retryTimer = null;
-    }
     invalidatePagerCache();
     cancelPendingRefreshSchedule();
     requestRefresh(REFRESH_FULL, 0);
-    schedulePresenceChecks();
   }
 
-  // iOS 从后台恢复时，网站可能在唤醒事件之后才重建 DOM；用有限恢复脉冲覆盖该窗口。
+  // 页面恢复时按事件立即刷新；常驻 MutationObserver 持续负责结构自愈，
+  // 不使用轮询或有限次数的延迟重试。
   function scheduleWakeRecovery() {
-    STATE.wakeRecoveryTimers.forEach(clearTimeout);
-    STATE.wakeRecoveryTimers = [];
-    const run = () => {
-      if (!document.hidden) recoverRefresh();
-    };
-    run();
-    [120, 450, 1200].forEach((delay) => STATE.wakeRecoveryTimers.push(setTimeout(run, delay)));
+    if (!document.hidden) recoverRefresh();
   }
 
   function installLifecycleListenersOnce() {
@@ -1248,14 +1072,6 @@
       STATE.hydrationTimer = null;
       scheduleEventUpdate();
     });
-    window.addEventListener(ACCESSORIES_CHANGE_EVENT, (event) => {
-      if (event?.detail?.id === SCRIPT_ID) return;
-      requestRefresh(REFRESH_LAYOUT);
-    });
-    window.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
-    window.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT), { passive: true });
-    window.visualViewport?.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
-    window.visualViewport?.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT));
     window.addEventListener("pageshow", scheduleWakeRecovery);
     window.addEventListener("focus", scheduleWakeRecovery);
     document.addEventListener("visibilitychange", () => {
@@ -1272,8 +1088,6 @@
         requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT, 0);
         return;
       }
-      const layoutChanged = mutations.some(mutationTouchesLayoutNeighbor);
-      if (layoutChanged) requestRefresh(REFRESH_LAYOUT);
       // 先过滤无关 DOM；只有确实触及分页线索的批次才进入节流与补扫。
       if (!mutations.some(mutationTouchesRelevantUi)) return;
       const now = Date.now();
@@ -1298,11 +1112,6 @@
   // resume 必须同步给出真实结果：若交给异步调度再返回 false，
   // 新注入的实例会与仍在监听的旧实例同时重建工具栏，互相抢节点。
   function resume() {
-    STATE.refreshRetryCount = 0;
-    if (STATE.retryTimer) {
-      clearTimeout(STATE.retryTimer);
-      STATE.retryTimer = null;
-    }
     invalidatePagerCache();
     cancelPendingRefreshSchedule();
     STATE.pendingRefreshFlags = 0;
@@ -1315,22 +1124,17 @@
       if (box) applyPosition(box);
       STATE.initialized = true;
       INSTANCE.phase = "running";
-      broadcastAccessoryState();
     } catch (error) {
       INSTANCE.phase = "failed";
       log("重注入恢复失败", error);
       return false;
     }
     requestRefresh(REFRESH_CONTENT, 0);
-    installIdleProbeOnce();
-    schedulePresenceChecks();
     return toolbarPresent();
   }
 
   function init() {
     requestRefresh(REFRESH_FULL, 0);
-    schedulePresenceChecks();
-    installIdleProbeOnce();
   }
 
   INSTANCE.resume = resume;
