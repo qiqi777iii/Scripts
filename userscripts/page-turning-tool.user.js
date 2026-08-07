@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.8.0
+// @version      1.8.1
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并显示独立悬浮翻页按钮。
@@ -482,22 +482,21 @@
   }
 
   // 只处理已经确认的站点边界：
-  // 1. NodeSeek 和 XVideos 根首页是第 1 页，不能出现“上一页”；
+  // 1. NodeSeek 首页与帖子 URL 尾页码为 1 时是第 1 页，不能出现“上一页”；
   // 2. MissAV 视频详情页不分页；搜索第 1 页不能出现“上一页”；
   // 3. Eporner 根首页和视频详情页不分页；
   // 4. SpankBang 视频详情页不分页；播放列表和搜索结果第 1 页不能出现“上一页”。
   function directionBlockedBySite(direction) {
     const nodeSeekFirstPage = direction === "prev" &&
       /(^|\.)nodeseek\.com$/i.test(location.hostname) &&
-      location.pathname === "/" &&
-      !pageFromUrl();
+      ((location.pathname === "/" && !pageFromUrl()) || /\/post-\d+-1\/?$/i.test(location.pathname));
     if (nodeSeekFirstPage) return true;
     if (isMissAvVideoPage() || isEpornerNonPagedPage() || isSpankBangVideoPage()) return true;
     return direction === "prev" && (isXVideosFirstHomePage() || isMissAvFirstSearchPage() || isSpankBangFirstListPage());
   }
 
   function findCandidate(direction, numericPager = null, generic = null) {
-    if (directionBlockedBySite(direction)) return null;
+    if (directionBlockedBySite(direction) || (direction === "prev" && numericPager?.currentPage === "1")) return null;
 
     const byRel = safeCall(`rel ${direction} 识别失败`, () => findByRel(direction), null);
     if (byRel) return byRel;
@@ -510,7 +509,9 @@
 
   // 一次性算出两个方向：先用 rel 与数字分页，只有仍有方向缺失时才扫描通用候选。
   function findBothCandidates(numericPager) {
-    const blockPrev = directionBlockedBySite("prev");
+    // 数字分页已确认当前为第 1 页时，任何“上一页”候选都应失效。
+    // 这条通用边界优先于 rel/文字评分，可避免站点把下一页链接误标成 prev 时反向跳到第 2 页。
+    const blockPrev = directionBlockedBySite("prev") || numericPager?.currentPage === "1";
     const blockNext = directionBlockedBySite("next");
     if (blockPrev && blockNext) return { prev: null, next: null };
     const prevDirect = blockPrev ? null : (safeCall("rel prev 识别失败", () => findByRel("prev"), null) || numericPager?.prev || null);
@@ -562,7 +563,7 @@
     if (STATE.navigating) return;
     // SPA 或预览 DOM 变化可能让旧候选短暂留在缓存中；执行前再次应用站点边界，
     // 视频详情页即使按钮状态尚未来得及刷新，也绝不能导航到推荐视频。
-    if (directionBlockedBySite(direction)) {
+    if (directionBlockedBySite(direction) || (direction === "prev" && detectNumericPagerCached()?.currentPage === "1")) {
       STATE[direction] = null;
       STATE.candidateEpoch = -1;
       const button = document.getElementById(SCRIPT_ID)?.querySelector?.(`.${direction}`);
