@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频全屏按钮
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.0
+// @version      1.7.0
 // @description  检测网页视频，点击按钮后自动播放并切换为全屏。
 // @author       Scripting Agent
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js
@@ -33,9 +33,6 @@
 
   const SCRIPT_ID = "video-fullscreen";
   const STYLE_ID = `${SCRIPT_ID}-style`;
-  const BASE_TOOLBAR_ID = "universal-pagination-floating-menu";
-  const PAGE_NAVIGATION_ID = "floating-page-navigation";
-  const ACCESSORIES_CHANGE_EVENT = "floating-accessories-change";
   const SHARED_URL_CHANGE_EVENT = "scripts:urlchange";
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__";
   const USER_PLAYBACK_ATTRIBUTE = "data-user-playback-until";
@@ -43,9 +40,8 @@
   const COVER_PREVIEW_VIDEO_CLASS = "__mobile_preview__";
   const PREVIEW_CONTAINER_SELECTOR = 'a[href], [class*="preview" i], [class*="thumb" i], [class*="card" i], [class*="related" i], [class*="recommend" i]';
   const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
-  const CONNECT_OVERLAP = 1;
-  const DEFAULT_RIGHT_GAP = 86;
-  const DEFAULT_BOTTOM_GAP = 28;
+  const DEFAULT_RIGHT_GAP = 20;
+  const DEFAULT_BOTTOM_GAP = 40;
   const state = {
     activeVideo: null,
     visible: false,
@@ -56,10 +52,6 @@
     retryTimer: null,
     refreshRetryCount: 0,
     listenersInstalled: false,
-    baseObserver: null,
-    navObserver: null,
-    observedBase: null,
-    observedNav: null,
     videoResizeObserver: null,
     observedVideos: [],
     pendingRefreshFlags: 0,
@@ -67,21 +59,8 @@
     refreshFrame: null,
     refreshFallbackTimer: null,
     refreshToken: 0,
-    wakeRecoveryTimers: [],
-    presenceTimers: [],
-    idleProbeInstalled: false,
-    lastBroadcastVisible: null,
   };
 
-  // 有界存在性校验：健康即提前停止，全程不使用常驻轮询。
-  // 各脚本只分叉这一组参数，校验逻辑本身保持五份同构。
-  // 本按钮是条件显示的，已经监听了 play/playing 等媒体事件，
-  // 那些事件本身就是最准确的到场信号，因此定时尾窗口最短；
-  // 探针也改用 play/playing：用户点播放的那一刻才是它真正需要在场的时刻。
-  const PRESENCE_PROFILE = {
-    delays: [0, 200, 700],
-    probeEvents: ["play", "playing", "pointerdown"],
-  };
 
   function log(...args) {
     try {
@@ -153,74 +132,12 @@
     return best;
   }
 
-  function controlsAreAdjacent(leftControl, rightControl) {
-    if (!elementVisible(leftControl) || !elementVisible(rightControl)) return false;
-    const leftRect = leftControl.getBoundingClientRect();
-    const rightRect = rightControl.getBoundingClientRect();
-    return Math.abs(leftRect.right - rightRect.left) <= 1.5 && Math.abs(leftRect.top - rightRect.top) <= 1.5;
-  }
-
-  function refreshConnectedVisual(button) {
-    const base = document.getElementById(BASE_TOOLBAR_ID);
-    const navigation = document.getElementById(PAGE_NAVIGATION_ID);
-    const leftControl = elementVisible(navigation) ? navigation : base;
-    const connectedLeft = controlsAreAdjacent(leftControl, button);
-    button.dataset.connectedLeft = connectedLeft ? "true" : "false";
-    button.dataset.connectedRight = "false";
-    if (base && !elementVisible(navigation)) base.dataset.connectedRight = connectedLeft ? "true" : "false";
-    if (navigation) navigation.dataset.connectedRight = connectedLeft && leftControl === navigation ? "true" : "false";
-  }
-
-  function observeAnchor(anchor, key) {
-    const observerKey = key === "base" ? "baseObserver" : "navObserver";
-    const markerKey = key === "base" ? "observedBase" : "observedNav";
-    if (state[markerKey] === anchor) return;
-    state[observerKey]?.disconnect();
-    state[markerKey] = anchor || null;
-    state[observerKey] = null;
-    if (!anchor) return;
-    state[observerKey] = new MutationObserver(schedulePosition);
-    state[observerKey].observe(anchor, { attributes: true, attributeFilter: ["style", "class", "hidden"] });
-  }
-
   function applyPosition(button) {
     if (!button?.isConnected || !state.visible) return;
-    const base = document.getElementById(BASE_TOOLBAR_ID);
-    const navigation = document.getElementById(PAGE_NAVIGATION_ID);
-    observeAnchor(base, "base");
-    observeAnchor(navigation, "nav");
-
-    if (elementVisible(navigation)) {
-      const rect = navigation.getBoundingClientRect();
-      button.style.left = `${rect.right - CONNECT_OVERLAP}px`;
-      button.style.right = "auto";
-      const usesBottom = navigation.style.bottom && navigation.style.bottom !== "auto" && (!navigation.style.top || navigation.style.top === "auto");
-      if (usesBottom) {
-        button.style.bottom = navigation.style.bottom;
-        button.style.top = "auto";
-      } else {
-        button.style.top = `${rect.top}px`;
-        button.style.bottom = "auto";
-      }
-    } else if (elementVisible(base)) {
-      const rect = base.getBoundingClientRect();
-      button.style.left = `${rect.right - CONNECT_OVERLAP}px`;
-      button.style.right = "auto";
-      const usesBottom = base.style.bottom && base.style.bottom !== "auto" && (!base.style.top || base.style.top === "auto");
-      if (usesBottom) {
-        button.style.bottom = base.style.bottom;
-        button.style.top = "auto";
-      } else {
-        button.style.top = `${rect.top}px`;
-        button.style.bottom = "auto";
-      }
-    } else {
-      button.style.right = `${DEFAULT_RIGHT_GAP}px`;
-      button.style.bottom = `${DEFAULT_BOTTOM_GAP}px`;
-      button.style.left = "auto";
-      button.style.top = "auto";
-    }
-    refreshConnectedVisual(button);
+    button.style.right = `${DEFAULT_RIGHT_GAP}px`;
+    button.style.bottom = `${DEFAULT_BOTTOM_GAP}px`;
+    button.style.left = "auto";
+    button.style.top = "auto";
   }
 
   function schedulePosition() {
@@ -263,10 +180,6 @@
         -webkit-tap-highlight-color: transparent;
         transform: translate3d(0,0,0);
       }
-      #${SCRIPT_ID}[data-connected-left="true"] { border-radius: 0 999px 999px 0; box-shadow: inset -.5px 0 0 var(--qvf-separator), inset 0 .5px 0 var(--qvf-separator), inset 0 -.5px 0 var(--qvf-separator); }
-      #${SCRIPT_ID}[data-connected-right="true"] { border-radius: 999px 0 0 999px; box-shadow: inset .5px 0 0 var(--qvf-separator), inset 0 .5px 0 var(--qvf-separator), inset 0 -.5px 0 var(--qvf-separator); }
-      #${SCRIPT_ID}[data-connected-left="true"][data-connected-right="true"] { border-radius: 0; box-shadow: inset 0 .5px 0 var(--qvf-separator), inset 0 -.5px 0 var(--qvf-separator); }
-      #${SCRIPT_ID}[data-connected-left="true"]::before { content: ""; position: absolute; z-index: 2; left: 0; top: 7px; bottom: 7px; width: 1px; background: var(--qvf-separator); pointer-events: none; }
       #${SCRIPT_ID}:active { background: rgba(118,118,128,.12); }
       #${SCRIPT_ID} svg { width: 20px; height: 20px; display: block; pointer-events: none; }
       @media (prefers-color-scheme: dark) {
@@ -421,22 +334,12 @@
     button.type = "button";
     button.title = "视频全屏";
     button.setAttribute("aria-label", "视频全屏");
-    button.dataset.connectedLeft = "false";
-    button.dataset.connectedRight = "false";
     button.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path></svg>';
     isolateUi(button);
     bindAction(button);
     state.button = button;
     document.documentElement.appendChild(button);
     return button;
-  }
-
-  function broadcastAccessoryState() {
-    if (state.lastBroadcastVisible === state.visible) return;
-    state.lastBroadcastVisible = state.visible;
-    try {
-      window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: SCRIPT_ID, visible: state.visible } }));
-    } catch (_) {}
   }
 
   function syncVideoResizeObserver() {
@@ -464,17 +367,12 @@
     const button = buttonPresent() ? state.button : createButton();
     button.style.display = visible ? "flex" : "none";
     button.setAttribute("aria-hidden", visible ? "false" : "true");
-    refreshConnectedVisual(button);
-    if (visible !== state.visible) {
-      state.visible = visible;
-      broadcastAccessoryState();
-    }
+    state.visible = visible;
     if (visible) schedulePosition();
   }
 
   function mutationRefreshFlags(mutation) {
     let flags = 0;
-    const toolbarSelector = `#${BASE_TOOLBAR_ID}, #${PAGE_NAVIGATION_ID}`;
     const removedActiveVideo = state.activeVideo && [...mutation.removedNodes].some((node) =>
       node === state.activeVideo || (node instanceof Element && node.contains(state.activeVideo))
     );
@@ -482,7 +380,6 @@
 
     for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
       if (!(node instanceof Element)) continue;
-      if (node.matches?.(toolbarSelector) || node.querySelector?.(toolbarSelector)) flags |= REFRESH_LAYOUT;
       const videos = node.matches?.("video") ? [node] : [...node.querySelectorAll?.("video") || []];
       if (videos.some((video) => !isCoverPreviewVideo(video) && !video.closest?.(PREVIEW_CONTAINER_SELECTOR))) {
         flags |= REFRESH_CONTENT;
@@ -495,11 +392,10 @@
   const REFRESH_CONTENT = 2;
   const REFRESH_LAYOUT = 4;
   const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT;
-  const REFRESH_RETRY_DELAYS = [120, 300, 700, 1500, 3000, 6000];
-
+  // 仅在实际刷新失败时持续退避恢复；正常状态没有定时轮询。
   function scheduleRefreshRetry() {
-    if (document.hidden || state.retryTimer || state.refreshRetryCount >= REFRESH_RETRY_DELAYS.length) return;
-    const delay = REFRESH_RETRY_DELAYS[state.refreshRetryCount++];
+    if (document.hidden || state.retryTimer) return;
+    const delay = Math.min(30000, 250 * (2 ** Math.min(state.refreshRetryCount++, 7)));
     state.retryTimer = setTimeout(() => {
       state.retryTimer = null;
       requestRefresh(REFRESH_FULL);
@@ -614,36 +510,6 @@
     return document.getElementById(STYLE_ID) === state.styleElement && Boolean(state.styleElement?.isConnected);
   }
 
-  function cancelPresenceChecks() {
-    state.presenceTimers.forEach(clearTimeout);
-    state.presenceTimers = [];
-  }
-
-  function schedulePresenceChecks() {
-    cancelPresenceChecks();
-    PRESENCE_PROFILE.delays.forEach((delay) => {
-      state.presenceTimers.push(setTimeout(() => {
-        if (document.hidden) return;
-        if (buttonPresent()) {
-          cancelPresenceChecks();
-          return;
-        }
-        requestRefresh(REFRESH_FULL);
-      }, delay));
-    });
-  }
-
-  // 用户真正看到页面的那一刻必查一次；once 监听，几乎无开销。
-  function installIdleProbeOnce() {
-    if (state.idleProbeInstalled) return;
-    state.idleProbeInstalled = true;
-    const probe = () => {
-      if (!document.hidden && !buttonPresent()) requestRefresh(REFRESH_FULL);
-    };
-    const options = { once: true, passive: true, capture: true };
-    PRESENCE_PROFILE.probeEvents.forEach((type) => window.addEventListener(type, probe, options));
-  }
-
   function recoverRefresh() {
     state.refreshRetryCount = 0;
     if (state.retryTimer) {
@@ -652,18 +518,6 @@
     }
     cancelPendingRefreshSchedule();
     requestRefresh(REFRESH_FULL);
-    schedulePresenceChecks();
-  }
-
-  // iOS 从后台恢复时，网站可能在唤醒事件之后才重建 DOM；用有限恢复脉冲覆盖该窗口。
-  function scheduleWakeRecovery() {
-    state.wakeRecoveryTimers.forEach(clearTimeout);
-    state.wakeRecoveryTimers = [];
-    const run = () => {
-      if (!document.hidden) recoverRefresh();
-    };
-    run();
-    [120, 450, 1200].forEach((delay) => state.wakeRecoveryTimers.push(setTimeout(run, delay)));
   }
 
   function installLifecycleListenersOnce() {
@@ -682,16 +536,11 @@
     });
     window.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
     window.visualViewport?.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
-    window.addEventListener("pageshow", scheduleWakeRecovery);
-    window.addEventListener("focus", scheduleWakeRecovery);
+    window.addEventListener("pageshow", recoverRefresh);
+    window.addEventListener("focus", recoverRefresh);
     window.addEventListener(SHARED_URL_CHANGE_EVENT, recoverRefresh);
-    // 相邻悬浮组件出现/消失时确定性地重新收敛位置，不再只依赖 MutationObserver 启发式命中。
-    window.addEventListener(ACCESSORIES_CHANGE_EVENT, (event) => {
-      if (event?.detail?.id === SCRIPT_ID) return;
-      requestRefresh(REFRESH_LAYOUT);
-    });
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) scheduleWakeRecovery();
+      if (!document.hidden) recoverRefresh();
     });
   }
 
@@ -732,15 +581,11 @@
       log("重注入恢复失败", error);
       return false;
     }
-    installIdleProbeOnce();
-    schedulePresenceChecks();
     return buttonPresent();
   }
 
   function init() {
     requestRefresh(REFRESH_FULL);
-    schedulePresenceChecks();
-    installIdleProbeOnce();
   }
 
   INSTANCE.resume = resume;
