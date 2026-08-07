@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.4.5
+// @version      1.7.0
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并在悬浮工具栏右侧显示独立翻页按钮。
@@ -9,7 +9,7 @@
 // @match        http://*/*
 // @match        https://*/*
 // @noframes
-// @run-at       document-start
+// @run-at       document-end
 // @grant        GM.log
 // ==/UserScript==
 
@@ -18,12 +18,28 @@
 
   const INSTANCE_KEY = "__pageTurningToolInstanceV1__";
   const previousInstance = document[INSTANCE_KEY];
+  // 旧实例的闭包可能已随页面重写失效；resume 抛错或未确认成功时必须继续完整启动。
   if (previousInstance?.resume) {
-    previousInstance.resume("reinjected");
-    return;
+    let resumed = false;
+    try {
+      resumed = previousInstance.resume("reinjected") === true;
+    } catch (_) {
+      resumed = false;
+    }
+    if (resumed) return;
+    try { document[INSTANCE_KEY] = null; } catch (_) {}
   }
   const INSTANCE = { phase: "starting", resume: null };
   document[INSTANCE_KEY] = INSTANCE;
+  const ACCESSORIES_CHANGE_EVENT = "floating-accessories-change";
+  // 有界存在性校验：健康即提前停止，全程不使用常驻轮询。
+  // 各脚本只分叉这一组参数，校验逻辑本身保持五份同构。
+  // 本脚本的完整刷新会重扫分页 DOM，是五个脚本里成本最高的，
+  // 因此校验次数最稀疏；且发现缺失时只重建结构，不顺带重扫分页。
+  const PRESENCE_PROFILE = {
+    delays: [0, 300, 900, 2500],
+    probeEvents: ["scroll", "pointerdown"],
+  };
 
   const SCRIPT_ID = "floating-page-navigation";
   const STYLE_ID = `${SCRIPT_ID}-style`;
@@ -72,6 +88,10 @@
     candidateEpoch: -1,
     mutationScanAt: 0,
     mutationCatchupTimer: null,
+    wakeRecoveryTimers: [],
+    presenceTimers: [],
+    idleProbeInstalled: false,
+    lastBroadcastVisible: null,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -455,17 +475,47 @@
     return !Number.isFinite(page) || page <= 1;
   }
 
+  function isEpornerNonPagedPage() {
+    if (!/(^|\.)eporner\.com$/i.test(location.hostname)) return false;
+    const path = location.pathname.replace(/\/{2,}/g, "/");
+    // 已确认根首页和 /video-…/ 视频详情页都不属于网页分页界面。
+    return path === "/" || /^\/video-[^/]+(?:\/|$)/i.test(path);
+  }
+
+  function isSpankBangVideoPage() {
+    return /(^|\.)spankbang\.com$/i.test(location.hostname) &&
+      /^\/[a-z0-9]+\/video\/[^/]+\/?$/i.test(location.pathname);
+  }
+
+  function isSpankBangFirstListPage() {
+    if (!/(^|\.)spankbang\.com$/i.test(location.hostname)) return false;
+    // 列表首页格式：/<列表ID>/playlist/<名称>/ 或 /s/<搜索词>/；额外路径段通常表示后续页。
+    const isPlaylist = /^\/[a-z0-9]+\/playlist\/[^/]+\/?$/i.test(location.pathname);
+    const isSearch = /^\/s\/[^/]+\/?$/i.test(location.pathname);
+    if (!isPlaylist && !isSearch) return false;
+    const page = parseInt(pageFromUrl() || "1", 10);
+    return !Number.isFinite(page) || page <= 1;
+  }
+
+  function isXVideosFirstHomePage() {
+    return /(^|\.)xvideos\.com$/i.test(location.hostname) &&
+      location.pathname === "/" &&
+      !pageFromUrl();
+  }
+
   // 只处理已经确认的站点边界：
-  // 1. NodeSeek 根首页就是第 1 页，不能出现“上一页”；
-  // 2. MissAV 视频详情页不分页；搜索第 1 页不能出现“上一页”。
+  // 1. NodeSeek 和 XVideos 根首页是第 1 页，不能出现“上一页”；
+  // 2. MissAV 视频详情页不分页；搜索第 1 页不能出现“上一页”；
+  // 3. Eporner 根首页和视频详情页不分页；
+  // 4. SpankBang 视频详情页不分页；播放列表和搜索结果第 1 页不能出现“上一页”。
   function directionBlockedBySite(direction) {
     const nodeSeekFirstPage = direction === "prev" &&
       /(^|\.)nodeseek\.com$/i.test(location.hostname) &&
       location.pathname === "/" &&
       !pageFromUrl();
     if (nodeSeekFirstPage) return true;
-    if (isMissAvVideoPage()) return true;
-    return direction === "prev" && isMissAvFirstSearchPage();
+    if (isMissAvVideoPage() || isEpornerNonPagedPage() || isSpankBangVideoPage()) return true;
+    return direction === "prev" && (isXVideosFirstHomePage() || isMissAvFirstSearchPage() || isSpankBangFirstListPage());
   }
 
   function findCandidate(direction, numericPager = null, generic = null) {
@@ -852,7 +902,6 @@
     }
     const parent = document.body || document.documentElement;
     if (parent && box.parentNode !== parent) parent.appendChild(box);
-    schedulePosition();
     return box;
   }
 
@@ -872,8 +921,8 @@
       STATE.candidateEpoch = STATE.domEpoch;
       const box = ensureToolbar();
       if (!box) return;
-      box.querySelector(".prev").disabled = !STATE.prev;
-      box.querySelector(".next").disabled = !STATE.next;
+      STATE.prevButton.disabled = !STATE.prev;
+      STATE.nextButton.disabled = !STATE.next;
       if (!STATE.prev && !STATE.next && !STATE.hydrationRetried && !STATE.hydrationTimer) {
         STATE.hydrationTimer = setTimeout(() => {
           STATE.hydrationTimer = null;
@@ -949,14 +998,21 @@
     return false;
   }
 
+  function mutationTouchesLayoutNeighbor(mutation) {
+    const selector = `#${BASE_TOOLBAR_ID}, #${VIDEO_FULLSCREEN_ID}`;
+    return [...mutation.addedNodes, ...mutation.removedNodes].some((node) =>
+      node instanceof Element && (node.matches?.(selector) || node.querySelector?.(selector))
+    );
+  }
+
   function mutationTouchesRelevantUi(mutation) {
     const target = mutation.target instanceof Element ? mutation.target : mutation.target?.parentElement;
     if (target?.closest?.(`#${SCRIPT_ID}`) || target?.id === STYLE_ID) return false;
     for (const list of [mutation.addedNodes, mutation.removedNodes]) {
       for (const node of list) {
         if (!(node instanceof Element)) continue;
-        if (node.id === BASE_TOOLBAR_ID || node.id === VIDEO_FULLSCREEN_ID || node.id === SCRIPT_ID || node.id === STYLE_ID || node.tagName === "HTML" || node.tagName === "BODY" || node.tagName === "HEAD") return true;
-        if (node.querySelector?.(`#${BASE_TOOLBAR_ID}, #${VIDEO_FULLSCREEN_ID}`) || elementHasPaginationSignal(node)) return true;
+        if (node.id === SCRIPT_ID || node.id === STYLE_ID || node.tagName === "HTML" || node.tagName === "BODY" || node.tagName === "HEAD") return true;
+        if (elementHasPaginationSignal(node)) return true;
         // 无限滚动站点每批新增节点可能上千，这里只看前 80 个交互元素并提前退出。
         const nodes = node.querySelectorAll?.('a, button, [role="button"], [rel~="next"], [rel~="prev"], [data-page], [data-page-number], [aria-current="page"]');
         if (!nodes) continue;
@@ -1036,6 +1092,7 @@
         STATE.initialized = true;
         INSTANCE.phase = "running";
         STATE.refreshRetryCount = 0;
+        broadcastAccessoryState();
         if (STATE.retryTimer) {
           clearTimeout(STATE.retryTimer);
           STATE.retryTimer = null;
@@ -1097,6 +1154,66 @@
     try { window[SHARED_HISTORY_HOOK_KEY] = { version: 2, eventName: SHARED_URL_CHANGE_EVENT, wrappers, handlers, sequence: Number(marker?.sequence || 0) }; } catch (_) {}
   }
 
+  // 节点存在不等于真的可见：站点样式可能把它压成零尺寸或隐藏。
+  function elementVisible(element) {
+    if (!element?.isConnected) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = getComputedStyle(element);
+    return style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  function toolbarPresent() {
+    const box = document.getElementById(SCRIPT_ID);
+    if (!box || box !== STATE.toolbar) return false;
+    if (box.querySelector(".prev") !== STATE.prevButton || box.querySelector(".next") !== STATE.nextButton) return false;
+    return elementVisible(box);
+  }
+
+  // 进入 running 后也可能被站点静默移除（不会抛异常，退避重试不会触发）；
+  // 用有界延时校验覆盖慢站点与 SPA 二次渲染窗口，确认健康即提前停止。
+  function cancelPresenceChecks() {
+    STATE.presenceTimers.forEach(clearTimeout);
+    STATE.presenceTimers = [];
+  }
+
+  function schedulePresenceChecks() {
+    cancelPresenceChecks();
+    PRESENCE_PROFILE.delays.forEach((delay) => {
+      STATE.presenceTimers.push(setTimeout(() => {
+        if (document.hidden) return;
+        if (toolbarPresent()) {
+          cancelPresenceChecks();
+          return;
+        }
+        // 只补结构与布局；分页内容扫描由 observer 和已有的 hydration 重试负责，
+        // 避免每次存在性校验都拖一次全页 DOM 扫描。
+        requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT, 0);
+      }, delay));
+    });
+  }
+
+  // 用户真正看到页面的那一刻必查一次；once 监听，几乎无开销。
+  function installIdleProbeOnce() {
+    if (STATE.idleProbeInstalled) return;
+    STATE.idleProbeInstalled = true;
+    const probe = () => {
+      if (!document.hidden && !toolbarPresent()) requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT, 0);
+    };
+    const options = { once: true, passive: true, capture: true };
+    PRESENCE_PROFILE.probeEvents.forEach((type) => window.addEventListener(type, probe, options));
+  }
+
+  // 自身可见性变化时广播，让相邻组件确定性地重新收敛拼接位置。
+  function broadcastAccessoryState() {
+    const visible = toolbarPresent();
+    if (STATE.lastBroadcastVisible === visible) return;
+    STATE.lastBroadcastVisible = visible;
+    try {
+      window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: SCRIPT_ID, visible } }));
+    } catch (_) {}
+  }
+
   function recoverRefresh() {
     STATE.refreshRetryCount = 0;
     if (STATE.retryTimer) {
@@ -1106,6 +1223,18 @@
     invalidatePagerCache();
     cancelPendingRefreshSchedule();
     requestRefresh(REFRESH_FULL, 0);
+    schedulePresenceChecks();
+  }
+
+  // iOS 从后台恢复时，网站可能在唤醒事件之后才重建 DOM；用有限恢复脉冲覆盖该窗口。
+  function scheduleWakeRecovery() {
+    STATE.wakeRecoveryTimers.forEach(clearTimeout);
+    STATE.wakeRecoveryTimers = [];
+    const run = () => {
+      if (!document.hidden) recoverRefresh();
+    };
+    run();
+    [120, 450, 1200].forEach((delay) => STATE.wakeRecoveryTimers.push(setTimeout(run, delay)));
   }
 
   function installLifecycleListenersOnce() {
@@ -1119,16 +1248,18 @@
       STATE.hydrationTimer = null;
       scheduleEventUpdate();
     });
-    window.addEventListener("floating-accessories-change", () => requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT));
+    window.addEventListener(ACCESSORIES_CHANGE_EVENT, (event) => {
+      if (event?.detail?.id === SCRIPT_ID) return;
+      requestRefresh(REFRESH_LAYOUT);
+    });
     window.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
     window.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT), { passive: true });
     window.visualViewport?.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
     window.visualViewport?.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT));
-    window.addEventListener("pageshow", recoverRefresh);
-    window.addEventListener("focus", recoverRefresh);
-    document.addEventListener("readystatechange", recoverRefresh);
+    window.addEventListener("pageshow", scheduleWakeRecovery);
+    window.addEventListener("focus", scheduleWakeRecovery);
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) recoverRefresh();
+      if (!document.hidden) scheduleWakeRecovery();
     });
   }
 
@@ -1138,12 +1269,13 @@
       const currentBox = document.getElementById(SCRIPT_ID);
       const toolbarBroken = !currentBox || currentBox !== STATE.toolbar || currentBox.querySelector(".prev") !== STATE.prevButton || currentBox.querySelector(".next") !== STATE.nextButton;
       if (toolbarBroken || document.getElementById(STYLE_ID) !== STATE.styleElement || !STATE.styleElement?.isConnected) {
-        invalidatePagerCache();
-        requestRefresh(REFRESH_FULL, 0);
+        requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT, 0);
         return;
       }
-      // 无限滚动站点会持续产生大量 mutation，同一节流窗口内只做一次深度判定；
-      // 被节流掉的批次不丢弃，改用一次延迟补扫兼顾准确性。
+      const layoutChanged = mutations.some(mutationTouchesLayoutNeighbor);
+      if (layoutChanged) requestRefresh(REFRESH_LAYOUT);
+      // 先过滤无关 DOM；只有确实触及分页线索的批次才进入节流与补扫。
+      if (!mutations.some(mutationTouchesRelevantUi)) return;
       const now = Date.now();
       if (now - STATE.mutationScanAt < 200) {
         if (!STATE.mutationCatchupTimer) {
@@ -1157,21 +1289,48 @@
         return;
       }
       STATE.mutationScanAt = now;
-      if (mutations.some(mutationTouchesRelevantUi)) {
-        invalidatePagerCache();
-        requestRefresh(REFRESH_FULL, 120);
-      }
+      invalidatePagerCache();
+      requestRefresh(REFRESH_CONTENT, 120);
     });
     STATE.observer.observe(document, { subtree: true, childList: true });
   }
 
+  // resume 必须同步给出真实结果：若交给异步调度再返回 false，
+  // 新注入的实例会与仍在监听的旧实例同时重建工具栏，互相抢节点。
   function resume() {
-    recoverRefresh();
-    return true;
+    STATE.refreshRetryCount = 0;
+    if (STATE.retryTimer) {
+      clearTimeout(STATE.retryTimer);
+      STATE.retryTimer = null;
+    }
+    invalidatePagerCache();
+    cancelPendingRefreshSchedule();
+    STATE.pendingRefreshFlags = 0;
+    try {
+      STATE.navigating = false;
+      installLifecycleListenersOnce();
+      installSharedHistoryHook();
+      const box = ensureToolbar();
+      ensureDocumentObserver();
+      if (box) applyPosition(box);
+      STATE.initialized = true;
+      INSTANCE.phase = "running";
+      broadcastAccessoryState();
+    } catch (error) {
+      INSTANCE.phase = "failed";
+      log("重注入恢复失败", error);
+      return false;
+    }
+    requestRefresh(REFRESH_CONTENT, 0);
+    installIdleProbeOnce();
+    schedulePresenceChecks();
+    return toolbarPresent();
   }
 
   function init() {
     requestRefresh(REFRESH_FULL, 0);
+    schedulePresenceChecks();
+    installIdleProbeOnce();
   }
 
   INSTANCE.resume = resume;

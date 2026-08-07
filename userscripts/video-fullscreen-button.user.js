@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频全屏按钮
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.2.10
+// @version      1.6.0
 // @description  检测网页视频，点击按钮后自动播放并切换为全屏。
 // @author       Scripting Agent
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js
@@ -17,9 +17,16 @@
 
   const INSTANCE_KEY = "__videoFullscreenButtonInstanceV1__";
   const previousInstance = document[INSTANCE_KEY];
+  // 旧实例的闭包可能已随页面重写失效；resume 抛错或未确认成功时必须继续完整启动。
   if (previousInstance?.resume) {
-    previousInstance.resume("reinjected");
-    return;
+    let resumed = false;
+    try {
+      resumed = previousInstance.resume("reinjected") === true;
+    } catch (_) {
+      resumed = false;
+    }
+    if (resumed) return;
+    try { document[INSTANCE_KEY] = null; } catch (_) {}
   }
   const INSTANCE = { phase: "starting", resume: null };
   document[INSTANCE_KEY] = INSTANCE;
@@ -60,6 +67,20 @@
     refreshFrame: null,
     refreshFallbackTimer: null,
     refreshToken: 0,
+    wakeRecoveryTimers: [],
+    presenceTimers: [],
+    idleProbeInstalled: false,
+    lastBroadcastVisible: null,
+  };
+
+  // 有界存在性校验：健康即提前停止，全程不使用常驻轮询。
+  // 各脚本只分叉这一组参数，校验逻辑本身保持五份同构。
+  // 本按钮是条件显示的，已经监听了 play/playing 等媒体事件，
+  // 那些事件本身就是最准确的到场信号，因此定时尾窗口最短；
+  // 探针也改用 play/playing：用户点播放的那一刻才是它真正需要在场的时刻。
+  const PRESENCE_PROFILE = {
+    delays: [0, 200, 700],
+    probeEvents: ["play", "playing", "pointerdown"],
   };
 
   function log(...args) {
@@ -328,7 +349,7 @@
   async function enterFullscreen() {
     const video = state.activeVideo && videoScore(state.activeVideo) >= 0 ? state.activeVideo : findActiveVideo();
     if (!video) {
-      scheduleUpdate(0);
+      requestRefresh(REFRESH_CONTENT);
       return;
     }
     try {
@@ -410,15 +431,24 @@
     return button;
   }
 
-  function notifyAccessoriesChanged() {
-    window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: SCRIPT_ID, visible: state.visible } }));
+  function broadcastAccessoryState() {
+    if (state.lastBroadcastVisible === state.visible) return;
+    state.lastBroadcastVisible = state.visible;
+    try {
+      window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: SCRIPT_ID, visible: state.visible } }));
+    } catch (_) {}
   }
 
   function syncVideoResizeObserver() {
     if (typeof ResizeObserver !== "function") return;
-    const videos = [...document.querySelectorAll("video")]
-      .filter((video) => !isCoverPreviewVideo(video))
-      .slice(0, 12);
+    const candidates = [...document.querySelectorAll("video")]
+      .filter((video) => !isCoverPreviewVideo(video));
+    const videos = [];
+    if (state.activeVideo?.isConnected && candidates.includes(state.activeVideo)) videos.push(state.activeVideo);
+    for (const video of candidates) {
+      if (videos.length >= 12) break;
+      if (!videos.includes(video)) videos.push(video);
+    }
     if (videos.length === state.observedVideos.length && videos.every((video, index) => video === state.observedVideos[index])) return;
     state.videoResizeObserver?.disconnect();
     state.videoResizeObserver = new ResizeObserver(() => requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT));
@@ -431,37 +461,34 @@
     const activeVideo = findActiveVideo();
     const visible = Boolean(activeVideo);
     state.activeVideo = activeVideo;
-    const button = createButton();
+    const button = buttonPresent() ? state.button : createButton();
     button.style.display = visible ? "flex" : "none";
     button.setAttribute("aria-hidden", visible ? "false" : "true");
     refreshConnectedVisual(button);
     if (visible !== state.visible) {
       state.visible = visible;
-      notifyAccessoriesChanged();
+      broadcastAccessoryState();
     }
     if (visible) schedulePosition();
   }
 
-  function scheduleUpdate() {
-    requestRefresh(REFRESH_CONTENT);
-  }
-
-  function mutationTouchesVideoOrToolbar(mutation) {
+  function mutationRefreshFlags(mutation) {
+    let flags = 0;
     const toolbarSelector = `#${BASE_TOOLBAR_ID}, #${PAGE_NAVIGATION_ID}`;
     const removedActiveVideo = state.activeVideo && [...mutation.removedNodes].some((node) =>
       node === state.activeVideo || (node instanceof Element && node.contains(state.activeVideo))
     );
-    if (removedActiveVideo) return true;
+    if (removedActiveVideo) flags |= REFRESH_CONTENT | REFRESH_LAYOUT;
 
-    return [...mutation.addedNodes, ...mutation.removedNodes].some((node) => {
-      if (!(node instanceof Element)) return false;
-      if (node.matches?.(toolbarSelector) || node.querySelector?.(toolbarSelector)) return true;
-
+    for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
+      if (!(node instanceof Element)) continue;
+      if (node.matches?.(toolbarSelector) || node.querySelector?.(toolbarSelector)) flags |= REFRESH_LAYOUT;
       const videos = node.matches?.("video") ? [node] : [...node.querySelectorAll?.("video") || []];
-      return videos.some((video) =>
-        !isCoverPreviewVideo(video) && !video.closest?.(PREVIEW_CONTAINER_SELECTOR)
-      );
-    });
+      if (videos.some((video) => !isCoverPreviewVideo(video) && !video.closest?.(PREVIEW_CONTAINER_SELECTOR))) {
+        flags |= REFRESH_CONTENT;
+      }
+    }
+    return flags;
   }
 
   const REFRESH_STRUCTURE = 1;
@@ -578,6 +605,45 @@
     try { window[SHARED_HISTORY_HOOK_KEY] = { version: 2, eventName: SHARED_URL_CHANGE_EVENT, wrappers, handlers, sequence: Number(marker?.sequence || 0) }; } catch (_) {}
   }
 
+  // 该按钮是条件显示的（无正式播放器视频时自行隐藏），
+  // 因此存在性只校验节点与样式是否健在，不能把 display:none 当作缺失。
+  function buttonPresent() {
+    const current = document.getElementById(SCRIPT_ID);
+    if (!current || current !== state.button || !(current instanceof HTMLButtonElement)) return false;
+    if (!current.isConnected || current.ownerDocument !== document || !current.querySelector("svg")) return false;
+    return document.getElementById(STYLE_ID) === state.styleElement && Boolean(state.styleElement?.isConnected);
+  }
+
+  function cancelPresenceChecks() {
+    state.presenceTimers.forEach(clearTimeout);
+    state.presenceTimers = [];
+  }
+
+  function schedulePresenceChecks() {
+    cancelPresenceChecks();
+    PRESENCE_PROFILE.delays.forEach((delay) => {
+      state.presenceTimers.push(setTimeout(() => {
+        if (document.hidden) return;
+        if (buttonPresent()) {
+          cancelPresenceChecks();
+          return;
+        }
+        requestRefresh(REFRESH_FULL);
+      }, delay));
+    });
+  }
+
+  // 用户真正看到页面的那一刻必查一次；once 监听，几乎无开销。
+  function installIdleProbeOnce() {
+    if (state.idleProbeInstalled) return;
+    state.idleProbeInstalled = true;
+    const probe = () => {
+      if (!document.hidden && !buttonPresent()) requestRefresh(REFRESH_FULL);
+    };
+    const options = { once: true, passive: true, capture: true };
+    PRESENCE_PROFILE.probeEvents.forEach((type) => window.addEventListener(type, probe, options));
+  }
+
   function recoverRefresh() {
     state.refreshRetryCount = 0;
     if (state.retryTimer) {
@@ -586,6 +652,18 @@
     }
     cancelPendingRefreshSchedule();
     requestRefresh(REFRESH_FULL);
+    schedulePresenceChecks();
+  }
+
+  // iOS 从后台恢复时，网站可能在唤醒事件之后才重建 DOM；用有限恢复脉冲覆盖该窗口。
+  function scheduleWakeRecovery() {
+    state.wakeRecoveryTimers.forEach(clearTimeout);
+    state.wakeRecoveryTimers = [];
+    const run = () => {
+      if (!document.hidden) recoverRefresh();
+    };
+    run();
+    [120, 450, 1200].forEach((delay) => state.wakeRecoveryTimers.push(setTimeout(run, delay)));
   }
 
   function installLifecycleListenersOnce() {
@@ -594,40 +672,75 @@
     ["play", "playing", "pause", "ended", "emptied", "loadedmetadata", "abort", "error"].forEach((type) => {
       document.addEventListener(type, (event) => {
         const video = event.target;
-        if (!(video instanceof HTMLVideoElement) || videoScore(video) < 0) return;
-        if (state.activeVideo?.isConnected && video !== state.activeVideo && videoScore(state.activeVideo) >= 0) return;
-        requestRefresh(type === "play" || type === "playing" ? REFRESH_CONTENT | REFRESH_LAYOUT : REFRESH_CONTENT);
+        if (!(video instanceof HTMLVideoElement) || isCoverPreviewVideo(video)) return;
+        const activeChanged = video === state.activeVideo;
+        const arrival = type === "play" || type === "playing" || type === "loadedmetadata";
+        if (!activeChanged && (!arrival || videoScore(video) < 0)) return;
+        if (!activeChanged && state.activeVideo?.isConnected && videoScore(state.activeVideo) >= 0) return;
+        requestRefresh(arrival ? REFRESH_CONTENT | REFRESH_LAYOUT : REFRESH_CONTENT);
       }, true);
     });
     window.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
     window.visualViewport?.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
-    window.addEventListener("pageshow", recoverRefresh);
-    window.addEventListener("focus", recoverRefresh);
+    window.addEventListener("pageshow", scheduleWakeRecovery);
+    window.addEventListener("focus", scheduleWakeRecovery);
     window.addEventListener(SHARED_URL_CHANGE_EVENT, recoverRefresh);
+    // 相邻悬浮组件出现/消失时确定性地重新收敛位置，不再只依赖 MutationObserver 启发式命中。
+    window.addEventListener(ACCESSORIES_CHANGE_EVENT, (event) => {
+      if (event?.detail?.id === SCRIPT_ID) return;
+      requestRefresh(REFRESH_LAYOUT);
+    });
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) recoverRefresh();
+      if (!document.hidden) scheduleWakeRecovery();
     });
   }
 
   function ensureDocumentObserver() {
     if (state.observer) return;
     state.observer = new MutationObserver((mutations) => {
-      if (!document.getElementById(SCRIPT_ID) || document.getElementById(STYLE_ID) !== state.styleElement || !state.styleElement?.isConnected || document.getElementById(SCRIPT_ID) !== state.button) {
+      if (!buttonPresent()) {
         requestRefresh(REFRESH_FULL);
-      } else if (mutations.some(mutationTouchesVideoOrToolbar)) {
-        requestRefresh(REFRESH_CONTENT | REFRESH_LAYOUT);
+      } else {
+        const flags = mutations.reduce((result, mutation) => result | mutationRefreshFlags(mutation), 0);
+        if (flags) requestRefresh(flags);
       }
     });
     state.observer.observe(document, { subtree: true, childList: true });
   }
 
+  // resume 必须同步给出真实结果：若交给异步调度再返回 false，
+  // 新注入的实例会与仍在监听的旧实例同时重建按钮，互相抢节点。
   function resume() {
-    recoverRefresh();
-    return true;
+    state.refreshRetryCount = 0;
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = null;
+    }
+    cancelPendingRefreshSchedule();
+    state.pendingRefreshFlags = 0;
+    try {
+      installLifecycleListenersOnce();
+      installSharedHistoryHook();
+      createButton();
+      ensureDocumentObserver();
+      updateButton();
+      applyPosition(document.getElementById(SCRIPT_ID));
+      state.initialized = true;
+      INSTANCE.phase = "running";
+    } catch (error) {
+      INSTANCE.phase = "failed";
+      log("重注入恢复失败", error);
+      return false;
+    }
+    installIdleProbeOnce();
+    schedulePresenceChecks();
+    return buttonPresent();
   }
 
   function init() {
     requestRefresh(REFRESH_FULL);
+    schedulePresenceChecks();
+    installIdleProbeOnce();
   }
 
   INSTANCE.resume = resume;

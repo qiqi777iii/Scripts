@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.6.10
+// @version      1.10.0
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
-// @run-at       document-start
+// @run-at       document-end
 // @grant        GM.log
 // @grant        GM.closeTab
 // @grant        GM.openInTab
@@ -19,10 +19,18 @@
   "use strict";
 
   const INSTANCE_KEY = "__floatingToolbarInstanceV1__";
+  // 旧实例的闭包可能已随页面重写失效；resume 抛错或未确认成功时必须继续完整启动，
+  // 否则这次注入会直接 return，页面上再没有任何调度器，只能靠用户手动刷新。
   const previousInstance = document[INSTANCE_KEY];
   if (previousInstance?.resume) {
-    previousInstance.resume("reinjected");
-    return;
+    let resumed = false;
+    try { resumed = previousInstance.resume("reinjected") === true; } catch (_) { resumed = false; }
+    if (!resumed) {
+      try { document[INSTANCE_KEY] = null; } catch (_) {}
+    }
+    if (resumed) {
+      return;
+    }
   }
   const INSTANCE = { phase: "starting", resume: null };
   document[INSTANCE_KEY] = INSTANCE;
@@ -42,6 +50,9 @@
   const DEFAULT_RIGHT_GAP = 60;
 
   const state = {
+    presenceTimers: [],
+    idleProbeInstalled: false,
+    lastBroadcastVisible: null,
     initialized: false,
     navigating: false,
     dragging: false,
@@ -61,6 +72,7 @@
     refreshFrame: null,
     refreshFallbackTimer: null,
     refreshToken: 0,
+    wakeRecoveryTimers: [],
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -389,6 +401,20 @@
     toolbar.addEventListener("pointercancel", finish);
   }
 
+  // 节点连着不等于看得见：站点 CSS 可能把它压成零尺寸或隐藏。
+  function elementVisible(element) {
+    if (!element?.isConnected) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return false;
+    const style = window.getComputedStyle(element);
+    return style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  function toolbarPresent() {
+    const toolbar = document.getElementById(TOOLBAR_ID);
+    return toolbarHealthy(toolbar) && elementVisible(toolbar);
+  }
+
   function toolbarHealthy(toolbar) {
     return Boolean(
       toolbar &&
@@ -463,9 +489,8 @@
   }
 
   const REFRESH_STRUCTURE = 1;
-  const REFRESH_CONTENT = 2;
-  const REFRESH_LAYOUT = 4;
-  const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_CONTENT | REFRESH_LAYOUT;
+  const REFRESH_LAYOUT = 2;
+  const REFRESH_FULL = REFRESH_STRUCTURE | REFRESH_LAYOUT;
   const REFRESH_RETRY_DELAYS = [120, 300, 700, 1500, 3000, 6000];
 
   function scheduleRefreshRetry() {
@@ -514,10 +539,10 @@
           ensureToolbar();
           ensureObserver();
         }
-        if (currentFlags & REFRESH_CONTENT) state.navigating = false;
         if (currentFlags & REFRESH_LAYOUT) stabilizePosition();
         state.initialized = true;
         INSTANCE.phase = "running";
+        broadcastAccessoryState();
         state.refreshRetryCount = 0;
         if (state.retryTimer) {
           clearTimeout(state.retryTimer);
@@ -538,7 +563,57 @@
     }
   }
 
+  const ACCESSORIES_CHANGE_EVENT = "floating-accessories-change";
+  // 有界存在性校验：健康即提前停止，全程不使用常驻轮询。
+  // 各脚本只分叉这一组参数，校验逻辑本身保持五份同构。
+  // 固定显示工具栏只需覆盖初始建栏和页面早期重写窗口；后续由 DOM 守卫和生命周期事件恢复。
+  const PRESENCE_PROFILE = {
+    delays: [0, 200, 700],
+    probeEvents: ["pointerdown"],
+  };
+
+  function cancelPresenceChecks() {
+    state.presenceTimers.forEach(clearTimeout);
+    state.presenceTimers = [];
+  }
+
+  function schedulePresenceChecks() {
+    cancelPresenceChecks();
+    PRESENCE_PROFILE.delays.forEach((delay) => {
+      state.presenceTimers.push(setTimeout(() => {
+        if (document.hidden) return;
+        if (toolbarPresent()) {
+          cancelPresenceChecks();
+          return;
+        }
+        requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT);
+      }, delay));
+    });
+  }
+
+  // 用户真正看到页面的那一刻必查一次；once 监听，几乎无开销。
+  function installIdleProbeOnce() {
+    if (state.idleProbeInstalled) return;
+    state.idleProbeInstalled = true;
+    const probe = () => {
+      if (!document.hidden && !toolbarPresent()) requestRefresh(REFRESH_STRUCTURE | REFRESH_LAYOUT);
+    };
+    const options = { once: true, passive: true, capture: true };
+    PRESENCE_PROFILE.probeEvents.forEach((type) => window.addEventListener(type, probe, options));
+  }
+
+  // 邻居靠这个广播重算拼接圆角，去重避免无信息重发。
+  function broadcastAccessoryState() {
+    const visible = toolbarPresent();
+    if (state.lastBroadcastVisible === visible) return;
+    state.lastBroadcastVisible = visible;
+    try {
+      window.dispatchEvent(new CustomEvent(ACCESSORIES_CHANGE_EVENT, { detail: { id: TOOLBAR_ID, visible } }));
+    } catch (_) {}
+  }
+
   function recoverRefresh() {
+    state.navigating = false;
     state.refreshRetryCount = 0;
     if (state.retryTimer) {
       clearTimeout(state.retryTimer);
@@ -548,18 +623,30 @@
     requestRefresh(REFRESH_FULL);
   }
 
+  // iOS 从后台恢复时，网站可能在唤醒事件之后才重建 DOM；用有限恢复脉冲覆盖该窗口。
+  function scheduleWakeRecovery() {
+    state.wakeRecoveryTimers.forEach(clearTimeout);
+    state.wakeRecoveryTimers = [];
+    const run = () => {
+      if (!document.hidden) recoverRefresh();
+    };
+    run();
+    [120, 450, 1200].forEach((delay) => state.wakeRecoveryTimers.push(setTimeout(run, delay)));
+  }
+
   function installListenersOnce() {
     if (state.listenersInstalled) return;
     state.listenersInstalled = true;
-    window.addEventListener("floating-accessories-change", () => requestRefresh(REFRESH_LAYOUT));
+    window.addEventListener(ACCESSORIES_CHANGE_EVENT, (event) => {
+      if (event?.detail?.id === TOOLBAR_ID) return; // 自己发的不用再听，防循环
+      requestRefresh(REFRESH_LAYOUT);
+    });
     window.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
-    window.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT), { passive: true });
     window.visualViewport?.addEventListener("resize", () => requestRefresh(REFRESH_LAYOUT));
-    window.visualViewport?.addEventListener("scroll", () => requestRefresh(REFRESH_LAYOUT));
-    window.addEventListener("pageshow", recoverRefresh);
-    window.addEventListener("focus", recoverRefresh);
+    window.addEventListener("pageshow", scheduleWakeRecovery);
+    window.addEventListener("focus", scheduleWakeRecovery);
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) recoverRefresh();
+      if (!document.hidden) scheduleWakeRecovery();
     });
   }
 
@@ -575,13 +662,28 @@
     state.observer.observe(document, { subtree: true, childList: true });
   }
 
+  // resume 必须同步把结构建好并返回真实结果；
+  // 如果只排个异步刷新就 return true，新旧实例会同时重建节点互相抢。
   function resume() {
-    recoverRefresh();
-    return true;
+    try {
+      cancelPendingRefreshSchedule();
+      state.refreshRetryCount = 0;
+      ensureToolbar();
+      ensureObserver();
+      installListenersOnce();
+      requestRefresh(REFRESH_LAYOUT);
+      schedulePresenceChecks();
+      installIdleProbeOnce();
+    } catch (_) {
+      return false;
+    }
+    return toolbarPresent();
   }
 
   function init() {
     requestRefresh(REFRESH_FULL);
+    schedulePresenceChecks();
+    installIdleProbeOnce();
   }
 
   INSTANCE.resume = resume;
