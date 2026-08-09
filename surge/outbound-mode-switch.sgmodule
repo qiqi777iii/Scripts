@@ -3,4 +3,4 @@
 #!category=工具
 
 [Script]
-出站模式切换 = type=event,event-name=network-changed,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30
+出站模式切换 = type=event,event-name=network-changed,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=60
