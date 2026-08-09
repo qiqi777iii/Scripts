@@ -6,6 +6,7 @@
 
 - `userscripts/`：可直接安装到 userscript 管理器的浏览器脚本。
 - `scripts/`：可导入 Scripting App 的完整脚本包。
+- `surge/`：Surge 模块及其配套脚本。
 
 ## Userscript
 
@@ -35,6 +36,12 @@
 | 翻译器 | [地址](https://github.com/qiqi777iii/Scripts/tree/main/scripts/Translator) |
 | 媒体下载 | [地址](https://github.com/qiqi777iii/Scripts/tree/main/scripts/MediaDownloader) |
 
+## Surge 模块
+
+| 模块 | 安装 |
+| --- | --- |
+| 出站模式切换 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.sgmodule) |
+
 ## 使用说明
 
 ### Userscript
@@ -46,3 +53,7 @@
 复制对应项目链接，在 Scripting App 中通过远程资源导入完整目录。脚本包的组件、Intent、Widget 和其他配套文件会随项目一起导入。
 
 > `scripts/TabsSaver/tabs-saver-button.user.js` 是标签页收藏单入口包的内置组件，由脚本包负责安装和更新，不需要单独导入。
+
+### Surge 模块
+
+复制模块链接，在 Surge 的「模块」中通过 URL 安装，模块内的脚本会自动从仓库拉取。
