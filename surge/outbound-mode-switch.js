@@ -4,12 +4,13 @@
  *   - 中国大陆 IP  -> 规则模式 (rule)
  *   - 非中国大陆 IP -> 直连模式 (direct)
  * 仅在 event: network-changed 时触发，不做轮询。
+ * 默认完全静默，不发通知；如需通知把 SILENT 改为 false。
  */
 
 const NAME = '出站模式切换';
 const STORE_KEY = 'outbound_mode_switch_state';
 const TIMEOUT = 5; // 秒
-const SILENT = false; // true = 不发通知
+const SILENT = true; // true = 不发通知
 
 // 多个探测源，按顺序回退。全部使用 DIRECT 策略请求。
 const SOURCES = [
@@ -72,6 +73,7 @@ function notify(title, sub, body) {
   const info = await detect();
 
   if (!info) {
+    console.log('[' + NAME + '] 探测失败，出站模式保持不变');
     notify(NAME, '探测失败', '无法获取直连出口 IP 归属地，出站模式保持不变');
     $done();
     return;
@@ -97,6 +99,10 @@ function notify(title, sub, body) {
 
   const changed = !prev || prev.mode !== mode;
   const modeText = isCN ? '规则模式' : '全局直连';
+  console.log(
+    '[' + NAME + '] ' + (changed ? '已切换' : '保持') + '：' + modeText +
+    '，IP=' + (info.ip || '未知') + '，归属地=' + cc
+  );
   notify(
     NAME,
     changed ? `已切换：${modeText}` : `保持：${modeText}`,
