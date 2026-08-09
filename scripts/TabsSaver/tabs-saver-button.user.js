@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.6.7
+// @version 2.6.9
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -43,10 +43,12 @@
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__"
   const STORE_FILE_NAME = "tabs-saver-store.json"
   const DEFAULT_GROUP_NAME = "默认"
-  const BTN_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40
+  // nodeseek 页面缩放为 100%，其余站点按 85% 缩放，尺寸与边距需单独适配。
+  const IS_NODESEEK = /(^|\.)nodeseek\.com$/i.test(location.hostname)
+  const BTN_SIZE = IS_NODESEEK ? 32 : 40
 
   const RIGHT_GAP = 65
-  const BOTTOM_GAP = 60
+  const BOTTOM_GAP = IS_NODESEEK ? 50 : 60
 
   let wrap = null
   let button = null

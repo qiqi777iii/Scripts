@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.2.3
+// @version      2.2.8
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，并可在扩展面板设置链接的新标签页打开模式。
@@ -38,9 +38,11 @@
     const KEY = '__tb_';
     const SHARED_ENABLED_KEY_PREFIX = 'newTabEnabledBySite:';
     const SHARED_MODE_KEY_PREFIX = 'newTabModeBySite:';
-    const BTN_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
-    const BOTTOM_GAP = 60;
-    const RIGHT_GAP = 105;
+    // nodeseek 页面缩放为 100%，其余站点按 85% 缩放，按钮尺寸与右边距需单独适配。
+    const IS_NODESEEK = /(^|\.)nodeseek\.com$/i.test(location.hostname);
+    const BTN_SIZE = IS_NODESEEK ? 32 : 40;
+    const BOTTOM_GAP = IS_NODESEEK ? 50 : 60;
+    const RIGHT_GAP = IS_NODESEEK ? 97 : 105;
     const SHARED_URL_CHANGE_EVENT = 'scripts:urlchange';
     const SHARED_HISTORY_HOOK_KEY = '__sharedHistoryHookV1__';
     const COVER_PREVIEW_READY_ATTR = 'data-cover-preview-ready';

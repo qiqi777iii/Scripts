@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.9.0
+// @version      1.9.2
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并显示独立悬浮翻页按钮。
@@ -33,9 +33,11 @@
   document[INSTANCE_KEY] = INSTANCE;
   const SCRIPT_ID = "floating-page-navigation";
   const STYLE_ID = `${SCRIPT_ID}-style`;
-  const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
+  // nodeseek 页面缩放为 100%，其余站点按 85% 缩放，尺寸与右边距需单独适配。
+  const IS_NODESEEK = /(^|\.)nodeseek\.com$/i.test(location.hostname);
+  const ITEM_SIZE = IS_NODESEEK ? 32 : 40;
   const WIDTH = ITEM_SIZE * 2;
-  const DEFAULT_RIGHT_GAP = 145;
+  const DEFAULT_RIGHT_GAP = IS_NODESEEK ? 129 : 145;
   const DEFAULT_BOTTOM_GAP = 15;
   const SHARED_URL_CHANGE_EVENT = "scripts:urlchange";
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__";
