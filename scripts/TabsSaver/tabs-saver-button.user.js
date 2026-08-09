@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.6.5
+// @version 2.6.7
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -45,8 +45,8 @@
   const DEFAULT_GROUP_NAME = "默认"
   const BTN_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40
 
-  const RIGHT_GAP = 60
-  const BOTTOM_GAP = 85
+  const RIGHT_GAP = 65
+  const BOTTOM_GAP = 60
 
   let wrap = null
   let button = null
@@ -472,7 +472,7 @@
 
   function bookmarkSVG(saved) {
     const fill = saved ? "currentColor" : "none"
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="21" height="21" fill="${fill}" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>`
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${fill}" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>`
   }
 
   function injectCSS() {
@@ -485,6 +485,7 @@
     style.textContent = `
 #${WRAP_ID}{position:fixed;left:0;top:0;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;}
 #${BUTTON_ID}{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:50%;background:#F2F2F7;color:rgba(28,28,30,.82);border:0;box-shadow:inset 0 0 0 .5px var(--combined-separator);filter:none;display:flex;align-items:center;justify-content:center;margin:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .12s ease,opacity .2s,border-radius .12s ease;}
+#${BUTTON_ID}>svg{display:block;width:60%;height:60%;flex:none;}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
 #${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:#E5E5EA;}
 #${TOAST_ID}{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.76);color:white;font:14px/18px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .2s;pointer-events:none;}

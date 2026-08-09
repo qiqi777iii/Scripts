@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翻页工具
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.8.1
+// @version      1.9.0
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/page-turning-tool.user.js
 // @description  自动识别网页上一页和下一页，并显示独立悬浮翻页按钮。
@@ -35,8 +35,8 @@
   const STYLE_ID = `${SCRIPT_ID}-style`;
   const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
   const WIDTH = ITEM_SIZE * 2;
-  const DEFAULT_RIGHT_GAP = 140;
-  const DEFAULT_BOTTOM_GAP = 40;
+  const DEFAULT_RIGHT_GAP = 145;
+  const DEFAULT_BOTTOM_GAP = 15;
   const SHARED_URL_CHANGE_EVENT = "scripts:urlchange";
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__";
   const STATE = {
@@ -166,13 +166,13 @@
     let score = 0;
 
     if (direction === "next") {
-      if (/\bnext\b|下一页|下页|后一页|后页|下一章|下章|older|forward/.test(all)) score += 80;
+      if (/\bnext\b|下一页|下页|后一页|后页|older/.test(all)) score += 80;
       if (/[›»→＞>]|^\s*下\s*$/.test(text)) score += 65;
       if (/rel=["']?next|\bnext\b/.test(all) || el.getAttribute("rel") === "next") score += 70;
       if (inPagination && /加载更多|更多|\bload\s+more\b|\bmore\b/.test(text)) score += 80;
       if (/page[=/_-]?\d+|p=\d+|paged=\d+/.test(href)) score += 10;
     } else {
-      if (/\bprev\b|\bprevious\b|上一页|上页|前一页|前页|上一章|上章|newer|\bback\b/.test(all)) score += 80;
+      if (/\bprev\b|\bprevious\b|上一页|上页|前一页|前页|newer/.test(all)) score += 80;
       if (/[‹«←＜<]|^\s*上\s*$/.test(text)) score += 65;
       if (/rel=["']?prev|\bprev\b|\bprevious\b/.test(all) || el.getAttribute("rel") === "prev") score += 70;
       if (/page[=/_-]?\d+|p=\d+|paged=\d+/.test(href)) score += 10;
@@ -191,8 +191,31 @@
     return Array.from(new Set(list.filter(Boolean)));
   }
 
+  // 当前页标记写法差异很大：除 aria-current / 整词 class 外，
+  // 还常见 button-selected、is-active 这类复合类名与 aria-label="Current page"。
   function explicitCurrentElement(root) {
-    return root?.querySelector?.('[aria-current="page"], [class~="current"], [class~="active"], [class~="selected"], .page-numbers.current, .page-numbers.active') || null;
+    if (!root?.querySelector) return null;
+    return root.querySelector('[aria-current="page"], [aria-current="true"], [class~="current"], [class~="active"], [class~="selected"], .page-numbers.current, .page-numbers.active') ||
+      root.querySelector('[aria-label*="current" i], [aria-label*="当前页"], [class*="selected" i], [class*="current" i], [class*="active" i]') ||
+      null;
+  }
+
+  // 归一化 URL，用于判断某个页码链接是否就是当前页。
+  // 第 1 页常常没有分页参数，因此 page=1 等价于无参数。
+  function normalizedUrlKey(urlLike) {
+    try {
+      const url = new URL(urlLike, location.href);
+      if (!/^https?:$/i.test(url.protocol)) return "";
+      url.hash = "";
+      for (const key of PAGE_QUERY_KEYS) {
+        if (/^0*1$/.test(url.searchParams.get(key) || "")) url.searchParams.delete(key);
+      }
+      url.searchParams.sort?.();
+      const query = url.searchParams.toString();
+      return `${url.origin}${url.pathname.replace(/\/+$/, "")}${query ? `?${query}` : ""}`;
+    } catch (_) {
+      return "";
+    }
   }
 
   function numericControlValue(el) {
@@ -262,7 +285,22 @@
         const currentEl = explicitCurrentElement(root);
         const explicitCurrent = parseInt(numericControlValue(currentEl) || "", 10);
         const urlNeighborsCurrent = Number.isFinite(urlCurrent) && (byPage.has(urlCurrent) || byPage.has(urlCurrent - 1) || byPage.has(urlCurrent + 1));
-        const current = Number.isFinite(explicitCurrent) ? explicitCurrent : (urlNeighborsCurrent ? urlCurrent : NaN);
+        // 指向当前 URL 自身的页码项就是当前页，
+        // 这能覆盖“第 1 页无分页参数且 current 类名不规范”的站点。
+        const selfKey = normalizedUrlKey(location.href);
+        let selfCurrent = NaN;
+        if (selfKey) {
+          for (const [page, el] of byPage) {
+            const href = el.href || el.getAttribute?.("href") || "";
+            if (href && normalizedUrlKey(href) === selfKey) {
+              selfCurrent = page;
+              break;
+            }
+          }
+        }
+        const current = Number.isFinite(explicitCurrent)
+          ? explicitCurrent
+          : (Number.isFinite(selfCurrent) ? selfCurrent : (urlNeighborsCurrent ? urlCurrent : NaN));
         const consecutive = pages.some((page, index) => index > 0 && page === pages[index - 1] + 1);
         const urlEvidence = [...byPage.entries()].filter(([page, el]) => hasPageUrlEvidence(el, page)).length;
         const dataEvidence = [...byPage.values()].filter((el) => el.hasAttribute?.("data-page") || el.hasAttribute?.("data-page-number")).length;
@@ -287,7 +325,34 @@
         log("数字分页容器识别失败", error);
       }
     }
-    return best;
+    return best || detectMissAvListingPager();
+  }
+
+  // MissAV 列表页的分页可能只有 ?page=N 链接，没有连续数字页码或 current 标记。
+  // 仅接受“同源、同路径、页码恰好相邻”的链接，避免把视频和分类内容误认为翻页。
+  function detectMissAvListingPager() {
+    if (!isMissAvListingPage()) return null;
+    const currentUrl = new URL(location.href);
+    const currentPage = Math.max(1, parseInt(currentUrl.searchParams.get("page") || "1", 10) || 1);
+    let prev = null;
+    let next = null;
+
+    for (const link of $$('a[href]')) {
+      if (!visible(link) || disabled(link) || isOwnUiElement(link) || isCoverPreviewContext(link)) continue;
+      let url;
+      try { url = new URL(link.href, location.href); } catch (_) { continue; }
+      if (url.origin !== currentUrl.origin || url.pathname !== currentUrl.pathname) continue;
+      const page = parseInt(url.searchParams.get("page") || "", 10);
+      if (!Number.isFinite(page)) continue;
+      if (page === currentPage - 1 && !prev) prev = link;
+      if (page === currentPage + 1 && !next) next = link;
+      if ((currentPage === 1 || prev) && next) break;
+    }
+
+    if (!prev && !next) return null;
+    const anchor = prev || next;
+    const root = paginationContainer(anchor) || anchor.closest?.("nav, ul, ol") || anchor.parentElement;
+    return { root, currentPage: String(currentPage), prev, next, score: 200 };
   }
 
   // 数字分页快照缓存：只要 DOM 纪元与 URL 未变，就复用上次结果，
@@ -370,7 +435,7 @@
   const GENERIC_SCORE_FLOOR = 30; // 低于该分数认为误判风险较高
   // 快速粗筛：分页容器外的候选只有命中方向关键词才可能超过 GENERIC_SCORE_FLOOR，
   // 先用一次正则滄掉绝大多数元素，避免为它们跑 getComputedStyle / closest。
-  const DIRECTION_HINT_RE = /next|prev|previous|older|newer|forward|back|下一|上一|下页|上页|下[页頁]|上[页頁]|前一|后一|下章|上章|加载更多|更多|more|[›»→＞‹«←＜]|page[=/_-]?\d+|[?&]p=\d+|paged=\d+/i;
+  const DIRECTION_HINT_RE = /next|prev|previous|older|newer|下一页|上一页|下页|上页|前一页|后一页|下[页頁]|上[页頁]|加载更多|更多|more|[›»→＞‹«←＜]|page[=/_-]?\d+|[?&]p=\d+|paged=\d+/i;
 
   const COVER_PREVIEW_VIDEO_SELECTOR = "video.__mobile_preview__, video.preview:not(.hidden)";
 
@@ -446,11 +511,9 @@
     return /^(?=.*[a-z])(?=.*\d)[a-z0-9]+(?:-[a-z0-9]+)*$/i.test(parts[0]);
   }
 
-  function isMissAvFirstSearchPage() {
+  function isMissAvListingPage() {
     const parts = normalizedMissAvPathParts();
-    if (!parts || parts[0]?.toLowerCase() !== "search" || parts.length < 2) return false;
-    const page = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
-    return !Number.isFinite(page) || page <= 1;
+    return Boolean(parts && /^(?:search|series|genres|makers|directors|labels)$/i.test(parts[0] || "") && parts.length >= 2);
   }
 
   function isEpornerNonPagedPage() {
@@ -465,63 +528,114 @@
       /^\/[a-z0-9]+\/video\/[^/]+\/?$/i.test(location.pathname);
   }
 
-  function isSpankBangFirstListPage() {
-    if (!/(^|\.)spankbang\.com$/i.test(location.hostname)) return false;
-    // 列表首页格式：/<列表ID>/playlist/<名称>/ 或 /s/<搜索词>/；额外路径段通常表示后续页。
-    const isPlaylist = /^\/[a-z0-9]+\/playlist\/[^/]+\/?$/i.test(location.pathname);
-    const isSearch = /^\/s\/[^/]+\/?$/i.test(location.pathname);
-    if (!isPlaylist && !isSearch) return false;
-    const page = parseInt(pageFromUrl() || "1", 10);
-    return !Number.isFinite(page) || page <= 1;
-  }
-
-  function isXVideosFirstHomePage() {
-    return /(^|\.)xvideos\.com$/i.test(location.hostname) &&
-      location.pathname === "/" &&
-      !pageFromUrl();
-  }
-
-  // 只处理已经确认的站点边界：
-  // 1. NodeSeek 首页与帖子 URL 尾页码为 1 时是第 1 页，不能出现“上一页”；
-  // 2. MissAV 视频详情页不分页；搜索第 1 页不能出现“上一页”；
-  // 3. Eporner 根首页和视频详情页不分页；
-  // 4. SpankBang 视频详情页不分页；播放列表和搜索结果第 1 页不能出现“上一页”。
+  // 只处理已经确认的“该页面根本没有网页分页”的站点边界：
+  // MissAV / SpankBang 视频详情页与 Eporner 根首页、视频详情页。
+  // 第 1 页的判断已全部改为通用逻辑，见 isFirstPageContext。
   function directionBlockedBySite(direction) {
-    const nodeSeekFirstPage = direction === "prev" &&
+    const nodeSeekFirstPost = direction === "prev" &&
       /(^|\.)nodeseek\.com$/i.test(location.hostname) &&
-      ((location.pathname === "/" && !pageFromUrl()) || /\/post-\d+-1\/?$/i.test(location.pathname));
-    if (nodeSeekFirstPage) return true;
-    if (isMissAvVideoPage() || isEpornerNonPagedPage() || isSpankBangVideoPage()) return true;
-    return direction === "prev" && (isXVideosFirstHomePage() || isMissAvFirstSearchPage() || isSpankBangFirstListPage());
+      /\/post-\d+-1\/?$/i.test(location.pathname);
+    if (nodeSeekFirstPost) return true;
+    return Boolean(isMissAvVideoPage() || isEpornerNonPagedPage() || isSpankBangVideoPage());
+  }
+
+  // 当前页码：优先用已识别的分页控件，其次用 URL 中的通用分页参数。
+  function currentPageNumber(numericPager) {
+    const fromPager = parseInt(numericPager?.currentPage || "", 10);
+    if (Number.isFinite(fromPager)) return fromPager;
+    const fromUrl = parseInt(pageFromUrl() || "", 10);
+    return Number.isFinite(fromUrl) ? fromUrl : NaN;
+  }
+
+  // 分页容器里可点击的最小页码是 2，说明第 1 页就是当前页（第 1 页通常渲染成非链接的 current 项）。
+  // 只在当前页码无法确定时作为兜底使用。
+  function pagerImpliesFirstPage() {
+    const roots = $$(PAGINATION_CONTAINER_SELECTOR).filter((root) => !isOwnUiElement(root) && visible(root));
+    if (!roots.length) return false;
+    let minPage = Infinity;
+    for (const root of roots) {
+      for (const el of $$('a[href], [data-page], [data-page-number]', root)) {
+        if (isOwnUiElement(el)) continue;
+        const page = parseInt(numericControlValue(el) || "", 10);
+        if (!Number.isFinite(page) || page < 1 || page > 99999) continue;
+        if (page < minPage) minPage = page;
+      }
+    }
+    return minPage === 2;
+  }
+
+  // 通用首页判定：
+  // 1. 分页控件或 URL 已明确当前是第 1 页；
+  // 2. 已识别到可信数字分页，但其中不存在上一页项；
+  // 3. 页码未知时，分页容器中最小可点击页码为 2。
+  function isFirstPageContext(numericPager) {
+    const current = currentPageNumber(numericPager);
+    if (Number.isFinite(current)) return current <= 1;
+    if (numericPager && !numericPager.prev) return true;
+    return safeCall("首页兜底判定失败", pagerImpliesFirstPage, false);
+  }
+
+  function prevBlocked(numericPager) {
+    return directionBlockedBySite("prev") || isFirstPageContext(numericPager);
+  }
+
+  // 候选与当前页码方向冲突时直接作废：
+  // “上一页”不能指向 >= 当前页，“下一页”不能指向 <= 当前页。
+  function conflictsWithCurrentPage(el, direction, current) {
+    if (!el || !Number.isFinite(current)) return false;
+    const href = el.href || el.getAttribute?.("href") || "";
+    if (!href) return false;
+    let url;
+    try { url = new URL(href, location.href); } catch (_) { return false; }
+    if (!/^https?:$/i.test(url.protocol) || url.origin !== location.origin) return false;
+    const page = parseInt(pageFromUrl(url.href) || "", 10);
+    if (!Number.isFinite(page)) return false;
+    return direction === "prev" ? page >= current : page <= current;
+  }
+
+  function acceptCandidate(el, direction, current) {
+    return el && !conflictsWithCurrentPage(el, direction, current) ? el : null;
   }
 
   function findCandidate(direction, numericPager = null, generic = null) {
-    if (directionBlockedBySite(direction) || (direction === "prev" && numericPager?.currentPage === "1")) return null;
+    if (directionBlockedBySite(direction) || (direction === "prev" && isFirstPageContext(numericPager))) return null;
+    const current = currentPageNumber(numericPager);
+    // 点击前重新识别时也维持 MissAV 列表页的严格规则，避免缓存失效后又降级到内容链接。
+    if (isMissAvListingPage()) return numericPager?.[direction] || null;
 
-    const byRel = safeCall(`rel ${direction} 识别失败`, () => findByRel(direction), null);
+    const byRel = acceptCandidate(safeCall(`rel ${direction} 识别失败`, () => findByRel(direction), null), direction, current);
     if (byRel) return byRel;
 
     if (numericPager?.[direction]) return numericPager[direction];
 
     const scan = generic || safeCall("通用候选扫描失败", findGenericCandidates, null);
-    return scan?.[direction] || null;
+    return acceptCandidate(scan?.[direction] || null, direction, current);
   }
 
   // 一次性算出两个方向：先用 rel 与数字分页，只有仍有方向缺失时才扫描通用候选。
   function findBothCandidates(numericPager) {
-    // 数字分页已确认当前为第 1 页时，任何“上一页”候选都应失效。
-    // 这条通用边界优先于 rel/文字评分，可避免站点把下一页链接误标成 prev 时反向跳到第 2 页。
-    const blockPrev = directionBlockedBySite("prev") || numericPager?.currentPage === "1";
+    // MissAV 的分类/系列/搜索列表中存在会被通用关键词误认成翻页的内容链接。
+    // 此类页面只信任经过连续页码和 URL 证据确认的数字分页；没有真实分页时两个按钮都禁用。
+    if (isMissAvListingPage()) {
+      return {
+        prev: isFirstPageContext(numericPager) ? null : (numericPager?.prev || null),
+        next: numericPager?.next || null,
+      };
+    }
+    // 通用首页边界：当前处于第 1 页时任何“上一页”候选都应失效。
+    // 该判定优先于 rel/文字评分，可避免站点把下一页链接误标成 prev 时反向跳到第 2 页。
+    const blockPrev = prevBlocked(numericPager);
     const blockNext = directionBlockedBySite("next");
     if (blockPrev && blockNext) return { prev: null, next: null };
-    const prevDirect = blockPrev ? null : (safeCall("rel prev 识别失败", () => findByRel("prev"), null) || numericPager?.prev || null);
-    const nextDirect = blockNext ? null : (safeCall("rel next 识别失败", () => findByRel("next"), null) || numericPager?.next || null);
+    const current = currentPageNumber(numericPager);
+    const prevDirect = blockPrev ? null : (acceptCandidate(safeCall("rel prev 识别失败", () => findByRel("prev"), null), "prev", current) || numericPager?.prev || null);
+    const nextDirect = blockNext ? null : (acceptCandidate(safeCall("rel next 识别失败", () => findByRel("next"), null), "next", current) || numericPager?.next || null);
     if ((blockPrev || prevDirect) && (blockNext || nextDirect)) return { prev: prevDirect, next: nextDirect };
 
     const generic = safeCall("通用候选扫描失败", findGenericCandidates, null);
     return {
-      prev: blockPrev ? null : (prevDirect || generic?.prev || null),
-      next: blockNext ? null : (nextDirect || generic?.next || null),
+      prev: blockPrev ? null : (prevDirect || acceptCandidate(generic?.prev || null, "prev", current)),
+      next: blockNext ? null : (nextDirect || acceptCandidate(generic?.next || null, "next", current)),
     };
   }
 
@@ -563,7 +677,7 @@
     if (STATE.navigating) return;
     // SPA 或预览 DOM 变化可能让旧候选短暂留在缓存中；执行前再次应用站点边界，
     // 视频详情页即使按钮状态尚未来得及刷新，也绝不能导航到推荐视频。
-    if (directionBlockedBySite(direction) || (direction === "prev" && detectNumericPagerCached()?.currentPage === "1")) {
+    if (directionBlockedBySite(direction) || (direction === "prev" && isFirstPageContext(detectNumericPagerCached()))) {
       STATE[direction] = null;
       STATE.candidateEpoch = -1;
       const button = document.getElementById(SCRIPT_ID)?.querySelector?.(`.${direction}`);
@@ -598,6 +712,12 @@
     if (!(clickTarget instanceof HTMLElement) || blocked(link)) return;
     let targetUrl = "";
     try { targetUrl = link?.href ? new URL(link.href, location.href).href : ""; } catch (_) {}
+    // MissAV 列表页的站点点击处理可能把分页链接改成新标签页打开。
+    // 翻页工具应始终在当前标签页切页，因此直接使用已确认分页链接的 URL。
+    if (isMissAvListingPage() && targetUrl && /^https?:/i.test(targetUrl)) {
+      hardNavigate(targetUrl);
+      return;
+    }
     const canFallback = Boolean(targetUrl && /^https?:/i.test(targetUrl) && (!link.target || link.target.toLowerCase() === "_self"));
     if (!link) {
       HTMLElement.prototype.click.call(clickTarget);
@@ -712,7 +832,7 @@
       }
       #${SCRIPT_ID} button:active:not(:disabled) { background: rgba(118,118,128,.12); }
       #${SCRIPT_ID} button:disabled { opacity: .28; cursor: default; }
-      #${SCRIPT_ID} svg { width: 22px; height: 22px; display: block; pointer-events: none; }
+      #${SCRIPT_ID} svg { width: 65%; height: 65%; display: block; pointer-events: none; }
       @media (prefers-color-scheme: dark) {
         #${SCRIPT_ID} {
           --qpn-text: rgba(255,255,255,.94);

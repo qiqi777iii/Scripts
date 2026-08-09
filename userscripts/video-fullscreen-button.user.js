@@ -40,8 +40,8 @@
   const COVER_PREVIEW_VIDEO_CLASS = "__mobile_preview__";
   const PREVIEW_CONTAINER_SELECTOR = 'a[href], [class*="preview" i], [class*="thumb" i], [class*="card" i], [class*="related" i], [class*="recommend" i]';
   const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
-  const DEFAULT_RIGHT_GAP = 20;
-  const DEFAULT_BOTTOM_GAP = 40;
+  const DEFAULT_RIGHT_GAP = 25;
+  const DEFAULT_BOTTOM_GAP = 15;
   const state = {
     activeVideo: null,
     visible: false,

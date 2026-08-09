@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频封面预览
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.4.3
+// @version      1.4.4
 // @description  单击视频封面播放静音预览，再次点击进入详情。
 // @match        *://*/*
 // @grant        none
@@ -26,8 +26,9 @@
     const IS_XVIDEOS = /(^|\.)xvideos\.com$/i.test(location.hostname);
     const IS_XHAMSTER = /(^|\.)xhamster\.com$/i.test(location.hostname);
     const IS_PORNHUB = /(^|\.)pornhub\.com$/i.test(location.hostname);
+    const IS_BEMYHOLE = /(^|\.)bemyhole\.com$/i.test(location.hostname);
     const IS_SPECIAL_SITE = IS_MISSAV || IS_RULE34VIDEO || IS_SPANKBANG || IS_EPORNER || IS_XVIDEOS || IS_XHAMSTER || IS_PORNHUB;
-    const BLOCK_NATIVE_SITE_PREVIEW = IS_MISSAV || IS_SPANKBANG || IS_EPORNER || IS_XVIDEOS || IS_XHAMSTER || IS_PORNHUB;
+    const BLOCK_NATIVE_SITE_PREVIEW = IS_MISSAV || IS_SPANKBANG || IS_EPORNER || IS_XVIDEOS || IS_XHAMSTER || IS_PORNHUB || IS_BEMYHOLE;
     const TAP_MAX_MS = 500;
     const SWIPE_CANCEL_DISTANCE = 10;
     const PREVIEW_SCROLL_CANCEL_DISTANCE = 48;
@@ -265,6 +266,10 @@
     }
 
     function findPreviewHost(card) {
+        if (IS_BEMYHOLE) {
+            const cover = card.querySelector('.img');
+            if (cover instanceof HTMLElement) return cover;
+        }
         if (IS_XVIDEOS && card.matches('.thumb-block:not(.thumb-ad)')) {
             const cover = card.querySelector('.thumb-inside .thumb');
             if (cover instanceof HTMLElement) return cover;
@@ -840,7 +845,8 @@
         nativePreviewBlockUrl = gesture.href;
         nativePreviewBlockUntil = now + 1200;
         // 首次点按可阻止站点自己的悬停预览；第二次点按保留网站原生导航事件链。
-        if (BLOCK_NATIVE_SITE_PREVIEW && !gesture.secondTap) event.stopImmediatePropagation();
+        // bemyhole 的 .touch-preview 覆盖层在 touchstart 内 preventDefault，第二次点按也需拦截才能保留导航。
+        if (BLOCK_NATIVE_SITE_PREVIEW && (!gesture.secondTap || IS_BEMYHOLE)) event.stopImmediatePropagation();
     }, { capture: true, passive: true });
 
     window.addEventListener('touchmove', function (event) {

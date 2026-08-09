@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.10.2
+// @version      1.10.3
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
@@ -34,9 +34,9 @@
   const TOOLBAR_ID = "universal-pagination-floating-menu";
   const STYLE_ID = `${TOOLBAR_ID}-style`;
   const ITEM_SIZE = /(^|\.)nodeseek\.com$/i.test(location.hostname) ? 32 : 40;
-  const SAFE_BOTTOM_GAP = 40;
-  const DEFAULT_BOTTOM_GAP = 40;
-  const DEFAULT_RIGHT_GAP = 60;
+  const SAFE_BOTTOM_GAP = 15;
+  const DEFAULT_BOTTOM_GAP = 15;
+  const DEFAULT_RIGHT_GAP = 65;
 
   const state = {
     initialized: false,
@@ -177,8 +177,8 @@
         pointer-events: none;
       }
       #${TOOLBAR_ID} button svg {
-        width: 20px;
-        height: 20px;
+        width: 60%;
+        height: 60%;
         display: block;
         pointer-events: none;
       }
