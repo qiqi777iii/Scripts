@@ -13,8 +13,8 @@
 | 脚本 | 安装 |
 | --- | --- |
 | 封面视频预览 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/cover-video-preview.user.js) |
-| 自动选择最高画质 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/auto-select-highest-quality.user.js) |
-| 悬浮工具栏 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js) |
+| 视频自动最高画质 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/auto-select-highest-quality.user.js) |
+| 工具栏 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js) |
 | 磁力链验车 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/magnet-link-checker.user.js) |
 | MissAV Plyr 本地样式修复 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/missav-plyr-local-style.user.js) |
 | MissAV浏览记录 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/missav-browsing-history.user.js) |

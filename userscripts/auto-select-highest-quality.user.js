@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         视频自动最高质量
+// @name         视频自动最高画质
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.0.5
+// @version      1.0.6
 // @description  自动将视频播放器切换并锁定为可用的最高画质
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/auto-select-highest-quality.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/auto-select-highest-quality.user.js
@@ -116,7 +116,7 @@
         clickWithoutAutoplay(highest.item)
         const message = `已选择 ${highest.quality}p`
         if (message !== lastLog) {
-          console.info(`[视频自动最高质量] ${message}`)
+          console.info(`[视频自动最高画质] ${message}`)
           lastLog = message
         }
       }
@@ -317,10 +317,10 @@
         switching = false
         return
       }
-      console.info(`[视频自动最高质量] 已选择 ${target.height}p`)
+      console.info(`[视频自动最高画质] 已选择 ${target.height}p`)
     } catch (error) {
       switching = false
-      console.warn("[视频自动最高质量] 切换画质失败", error)
+      console.warn("[视频自动最高画质] 切换画质失败", error)
     }
   }
 

@@ -1,10 +1,10 @@
 // ==UserScript==
-// @name         悬浮工具栏
+// @name         工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.10.4
+// @version      1.10.5
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
-// @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
+// @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的工具栏。
 // @author       Scripting Agent
 // @match        http://*/*
 // @match        https://*/*
@@ -70,8 +70,8 @@
 
   function log(...args) {
     try {
-      if (typeof GM !== "undefined" && GM.log) GM.log("[悬浮工具栏]", ...args);
-      else console.log("[悬浮工具栏]", ...args);
+      if (typeof GM !== "undefined" && GM.log) GM.log("[工具栏]", ...args);
+      else console.log("[工具栏]", ...args);
     } catch (_) {}
   }
 
@@ -347,7 +347,7 @@
     const toolbar = document.createElement("div");
     toolbar.id = TOOLBAR_ID;
     toolbar.setAttribute("role", "toolbar");
-    toolbar.setAttribute("aria-label", "悬浮工具栏");
+    toolbar.setAttribute("aria-label", "工具栏");
     toolbar.innerHTML = `
       <button class="new-tab" type="button" title="新建 Safari 起始页" aria-label="新建 Safari 起始页">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"></path></svg>
