@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.6.9
+// @version 2.7.0
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -41,6 +41,10 @@
   const STYLE_ID = "tab-save-style"
   const SHARED_URL_CHANGE_EVENT = "scripts:urlchange"
   const SHARED_HISTORY_HOOK_KEY = "__sharedHistoryHookV1__"
+  // 组合胶囊标记：两个悬浮按钮都停在各自默认位置时，才在 <html> 上同时出现两个标记，
+  // 由纯 CSS 把相邻的一侧拉直拼成胶囊；任一脚本未安装或被拖走时标记缺失，各自仍是独立圆钮。
+  const DOCK_FLAG_SELF = "fabTabSave"
+  const DOCK_COMBINED_SELECTOR = 'html[data-fab-new-tab="docked"][data-fab-tab-save="docked"]'
   const STORE_FILE_NAME = "tabs-saver-store.json"
   const DEFAULT_GROUP_NAME = "默认"
   // nodeseek 页面缩放为 100%，其余站点按 85% 缩放，尺寸与边距需单独适配。
@@ -490,6 +494,8 @@
 #${BUTTON_ID}>svg{display:block;width:60%;height:60%;flex:none;}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
 #${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:#E5E5EA;}
+${DOCK_COMBINED_SELECTOR} #${BUTTON_ID}{border-radius:0 999px 999px 0;}
+${DOCK_COMBINED_SELECTOR} #${BUTTON_ID}:active{transform:none;}
 #${TOAST_ID}{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.76);color:white;font:14px/18px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .2s;pointer-events:none;}
 #${DIALOG_ID}{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.34);font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#111;}
 #${DIALOG_ID} .qts-dialog-card{width:min(360px,calc(100vw - 32px));max-height:calc(100vh - 32px);display:flex;flex-direction:column;padding:24px 20px 18px;border-radius:24px;background:rgba(248,248,248,.96);-webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);box-shadow:0 20px 60px rgba(0,0,0,.28);}
@@ -569,8 +575,18 @@
     lastLayout = null
   }
 
+  function setDockFlag(docked) {
+    try {
+      const root = document.documentElement
+      if (!root) return
+      if (docked) root.dataset[DOCK_FLAG_SELF] = "docked"
+      else delete root.dataset[DOCK_FLAG_SELF]
+    } catch (_) {}
+  }
+
   function applySavedPosition() {
     if (!wrap || !savedPosition) return false
+    setDockFlag(false)
     const pos = clampPos(savedPosition.left, savedPosition.top)
     savedPosition = pos
     writeLayout(pos.left, pos.top, null)
@@ -579,6 +595,7 @@
 
   function applyDefaultPosition() {
     if (!wrap) return
+    setDockFlag(true)
     const viewport = getViewportBox()
     const left = Math.max(0, Math.floor(viewport.width - BTN_SIZE - RIGHT_GAP))
     writeLayout(left, null, BOTTOM_GAP)
@@ -674,6 +691,7 @@
     const dy = e.clientY - startY
     if (!moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return
     moved = true
+    setDockFlag(false)
     const pos = clampPos(startLeft + dx, startTop + dy)
     wrap.style.left = pos.left + "px"
     wrap.style.top = pos.top + "px"

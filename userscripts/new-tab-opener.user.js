@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.2.8
+// @version      2.2.9
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，并可在扩展面板设置链接的新标签页打开模式。
@@ -45,6 +45,10 @@
     const RIGHT_GAP = IS_NODESEEK ? 97 : 105;
     const SHARED_URL_CHANGE_EVENT = 'scripts:urlchange';
     const SHARED_HISTORY_HOOK_KEY = '__sharedHistoryHookV1__';
+    // 组合胶囊标记：两个悬浮按钮都停在各自默认位置时，才在 <html> 上同时出现两个标记，
+    // 由纯 CSS 把相邻的一侧拉直拼成胶囊；任一脚本未安装或被拖走时标记缺失，各自仍是独立圆钮。
+    const DOCK_FLAG_SELF = 'fabNewTab';
+    const DOCK_COMBINED_SELECTOR = 'html[data-fab-new-tab="docked"][data-fab-tab-save="docked"]';
     const COVER_PREVIEW_READY_ATTR = 'data-cover-preview-ready';
     const BACKGROUND_OPEN_REQUEST_EVENT = 'scripts:background-open-request';
     const TAB_CHECK_REQUEST_EVENT = 'scripts:tab-check-request';
@@ -729,6 +733,7 @@
 #__tb_btn__ svg{display:block;width:60%;height:60%;flex:none;pointer-events:none;stroke:currentColor;}
 #__tb_btn__:active{transform:none;opacity:.94;background:#E5E5EA;}
 #__tb_btn__[data-enabled="true"]:active{background:#E5E5EA;}
+${DOCK_COMBINED_SELECTOR} #__tb_btn__{border-radius:999px 0 0 999px;}
 #__tb_background_hint__{position:fixed;z-index:2147483647;left:50%;bottom:96px;max-width:calc(100vw - 40px);box-sizing:border-box;padding:9px 14px;border-radius:999px;background:rgba(28,28,30,.88);color:#fff;font:600 14px/1.3 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;opacity:0;transform:translate3d(-50%,8px,0);transition:opacity .16s ease,transform .16s ease;}
 #__tb_background_hint__[data-visible="true"]{opacity:1;transform:translate3d(-50%,0,0);}
 @media (prefers-reduced-motion:reduce){#__tb_background_hint__{transition:none;}}
@@ -770,8 +775,18 @@
         };
     }
 
+    function setDockFlag(docked) {
+        try {
+            const root = document.documentElement;
+            if (!root) return;
+            if (docked) root.dataset[DOCK_FLAG_SELF] = 'docked';
+            else delete root.dataset[DOCK_FLAG_SELF];
+        } catch (_) {}
+    }
+
     function applySavedPosition() {
         if (!toolbar || !savedPosition) return false;
+        setDockFlag(false);
         const pos = clampPos(savedPosition.left, savedPosition.top);
         savedPosition = pos;
         // 纯 fixed：直接用 left/top，不叠加 offset。
@@ -798,6 +813,7 @@
 
     function applyDefaultPosition() {
         if (!toolbar) return;
+        setDockFlag(true);
         lastAppliedLayout = null;
         toolbar.style.left = 'auto';
         toolbar.style.top = 'auto';
@@ -861,6 +877,7 @@
         const dy = e.clientY - startY;
         if (!moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
         moved = true;
+        setDockFlag(false);
 
         const pos = clampPos(startLeft + dx, startTop + dy);
         lastAppliedLayout = null;

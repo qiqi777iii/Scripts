@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         悬浮工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.10.3
+// @version      1.10.4
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的悬浮工具栏。
@@ -37,6 +37,19 @@
   const SAFE_BOTTOM_GAP = 15;
   const DEFAULT_BOTTOM_GAP = 15;
   const DEFAULT_RIGHT_GAP = 65;
+  // 组合胶囊标记：两个悬浮栏都停在各自默认位置时，才在 <html> 上同时出现两个标记，
+  // 由纯 CSS 把相邻的一侧拉直拼成胶囊；任一脚本未安装或被拖走时标记缺失，各自仍是独立胶囊。
+  const DOCK_FLAG_SELF = "fabToolbar";
+  const DOCK_COMBINED_SELECTOR = 'html[data-fab-pager="docked"][data-fab-toolbar="docked"]';
+
+  function setDockFlag(docked) {
+    try {
+      const root = document.documentElement;
+      if (!root) return;
+      if (docked) root.dataset[DOCK_FLAG_SELF] = "docked";
+      else delete root.dataset[DOCK_FLAG_SELF];
+    } catch (_) {}
+  }
 
   const state = {
     initialized: false,
@@ -95,6 +108,7 @@
   }
 
   function applyDefaultPosition(toolbar) {
+    setDockFlag(true);
     toolbar.style.right = `${DEFAULT_RIGHT_GAP}px`;
     toolbar.style.bottom = `${DEFAULT_BOTTOM_GAP}px`;
     toolbar.style.left = "auto";
@@ -103,6 +117,7 @@
 
   function applySavedPosition(toolbar) {
     if (!state.savedPosition) return false;
+    setDockFlag(false);
     const position = clampPosition(state.savedPosition.left, state.savedPosition.top, toolbar);
     state.savedPosition = position;
     toolbar.style.left = `${position.left}px`;
@@ -189,6 +204,7 @@
         fill: none;
       }
       #${TOOLBAR_ID} .close-tab { color: #ff3b30; }
+      ${DOCK_COMBINED_SELECTOR} #${TOOLBAR_ID} { border-radius: 0 999px 999px 0; }
       @media (prefers-color-scheme: dark) {
         #${TOOLBAR_ID} .close-tab { color: #ff453a; }
       }
