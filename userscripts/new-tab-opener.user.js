@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         新标签页打开
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      2.2.9
+// @version      2.3.0
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js
 // @description  在网页显示悬浮开关，并可在扩展面板设置链接的新标签页打开模式。
@@ -728,12 +728,12 @@
         style.id = '__tb_style__';
         style.textContent = `
 #__tb__{position:fixed;z-index:2147483647;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;touch-action:none;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;transform:translate3d(0,0,0);will-change:left,top,right,bottom,transform;}
-#__tb_btn__{position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:999px;background:#F2F2F7;color:rgba(28,28,30,.82);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity .2s;}
+#__tb_btn__{--combined-separator:rgba(60,60,67,.16);position:relative;width:${BTN_SIZE}px;height:${BTN_SIZE}px;box-sizing:border-box;border-radius:999px;background:#F2F2F7;color:rgba(28,28,30,.82);border:0;box-shadow:inset 0 0 0 .5px rgba(60,60,67,.16);filter:none;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:opacity .2s;}
 #__tb_btn__[data-enabled="true"]{color:#0A84FF;}
 #__tb_btn__ svg{display:block;width:60%;height:60%;flex:none;pointer-events:none;stroke:currentColor;}
 #__tb_btn__:active{transform:none;opacity:.94;background:#E5E5EA;}
 #__tb_btn__[data-enabled="true"]:active{background:#E5E5EA;}
-${DOCK_COMBINED_SELECTOR} #__tb_btn__{border-radius:999px 0 0 999px;}
+${DOCK_COMBINED_SELECTOR} #__tb_btn__{border-radius:999px 0 0 999px;width:${BTN_SIZE + 1}px;box-shadow:inset 0 .5px 0 0 var(--combined-separator),inset 0 -.5px 0 0 var(--combined-separator),inset .5px 0 0 0 var(--combined-separator);}
 #__tb_background_hint__{position:fixed;z-index:2147483647;left:50%;bottom:96px;max-width:calc(100vw - 40px);box-sizing:border-box;padding:9px 14px;border-radius:999px;background:rgba(28,28,30,.88);color:#fff;font:600 14px/1.3 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;opacity:0;transform:translate3d(-50%,8px,0);transition:opacity .16s ease,transform .16s ease;}
 #__tb_background_hint__[data-visible="true"]{opacity:1;transform:translate3d(-50%,0,0);}
 @media (prefers-reduced-motion:reduce){#__tb_background_hint__{transition:none;}}

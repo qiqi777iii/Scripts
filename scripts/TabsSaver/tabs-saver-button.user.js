@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name 标签页收藏
 // @namespace tabs-saver
-// @version 2.7.0
+// @version 2.7.1
 // @description 点击悬浮按钮可收藏当前或全部 Safari 标签页，并可选择保存后关闭标签页。
 // @match http://*/*
 // @match https://*/*
@@ -494,7 +494,7 @@
 #${BUTTON_ID}>svg{display:block;width:60%;height:60%;flex:none;}
 #${BUTTON_ID}[data-saved="true"]{color:#34C759;}
 #${BUTTON_ID}:active{transform:scale(.96);opacity:.94;background:#E5E5EA;}
-${DOCK_COMBINED_SELECTOR} #${BUTTON_ID}{border-radius:0 999px 999px 0;}
+${DOCK_COMBINED_SELECTOR} #${BUTTON_ID}{border-radius:0 999px 999px 0;box-shadow:inset 0 .5px 0 0 var(--combined-separator),inset 0 -.5px 0 0 var(--combined-separator),inset -.5px 0 0 0 var(--combined-separator);}
 ${DOCK_COMBINED_SELECTOR} #${BUTTON_ID}:active{transform:none;}
 #${TOAST_ID}{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:2147483647;padding:8px 12px;border-radius:999px;background:rgba(0,0,0,.76);color:white;font:14px/18px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transition:opacity .2s;pointer-events:none;}
 #${DIALOG_ID}{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.34);font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#111;}

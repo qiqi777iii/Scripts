@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         工具栏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.10.5
+// @version      1.10.6
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/floating-toolbar.user.js
 // @description  提供关闭当前标签页、新建 Safari 起始页及可拖动的工具栏。
@@ -204,7 +204,10 @@
         fill: none;
       }
       #${TOOLBAR_ID} .close-tab { color: #ff3b30; }
-      ${DOCK_COMBINED_SELECTOR} #${TOOLBAR_ID} { border-radius: 0 999px 999px 0; }
+      ${DOCK_COMBINED_SELECTOR} #${TOOLBAR_ID} {
+        border-radius: 0 999px 999px 0;
+        box-shadow: inset 0 .5px 0 0 var(--qft-separator), inset 0 -.5px 0 0 var(--qft-separator), inset -.5px 0 0 0 var(--qft-separator);
+      }
       @media (prefers-color-scheme: dark) {
         #${TOOLBAR_ID} .close-tab { color: #ff453a; }
       }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         快捷翻页
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.9.4
+// @version      1.9.5
 // @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/quick-pager.user.js
 // @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/quick-pager.user.js
 // @description  自动识别网页上一页和下一页，并显示独立悬浮翻页按钮。
@@ -883,7 +883,11 @@
       }
       #${SCRIPT_ID} button:active:not(:disabled) { background: rgba(118,118,128,.12); }
       #${SCRIPT_ID} button:disabled { opacity: .28; cursor: default; }
-      ${DOCK_COMBINED_SELECTOR} #${SCRIPT_ID} { border-radius: 999px 0 0 999px; }
+      ${DOCK_COMBINED_SELECTOR} #${SCRIPT_ID} {
+        border-radius: 999px 0 0 999px;
+        box-shadow: inset 0 .5px 0 0 var(--qpn-separator), inset 0 -.5px 0 0 var(--qpn-separator), inset .5px 0 0 0 var(--qpn-separator);
+        margin-right: -1px;
+      }
       #${SCRIPT_ID} svg { width: 65%; height: 65%; display: block; pointer-events: none; }
       @media (prefers-color-scheme: dark) {
         #${SCRIPT_ID} {
