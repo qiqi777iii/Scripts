@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         视频全屏按钮
+// @name         视频全屏
 // @namespace    https://github.com/qiqi777iii/Scripts
-// @version      1.7.0
+// @version      1.7.1
 // @description  检测网页视频，点击按钮后自动播放并切换为全屏。
 // @author       Scripting Agent
-// @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js
-// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js
+// @updateURL    https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen.user.js
+// @downloadURL  https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen.user.js
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-end
@@ -15,7 +15,7 @@
 (() => {
   "use strict";
 
-  const INSTANCE_KEY = "__videoFullscreenButtonInstanceV1__";
+  const INSTANCE_KEY = "__videoFullscreenInstanceV1__";
   const previousInstance = document[INSTANCE_KEY];
   // 旧实例的闭包可能已随页面重写失效；resume 抛错或未确认成功时必须继续完整启动。
   if (previousInstance?.resume) {

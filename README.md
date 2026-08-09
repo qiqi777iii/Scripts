@@ -21,7 +21,7 @@
 | 新标签页打开 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/new-tab-opener.user.js) |
 | 快捷翻页 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/quick-pager.user.js) |
 | 标签页检查 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/tab-checker.user.js) |
-| 视频全屏按钮 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen-button.user.js) |
+| 视频全屏 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen.user.js) |
 | 番号快速搜索 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/search-av-mobile.user.js) |
 | Ohentai 弹窗广告拦截 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/ohentai-popup-blocker.user.js) |
 
