@@ -23,6 +23,7 @@
 | 标签页检查 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/tab-checker.user.js) |
 | 视频全屏 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/video-fullscreen.user.js) |
 | 番号快速搜索 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/search-av-mobile.user.js) |
+| 输入框缩放锁定 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/input-zoom-lock.user.js) |
 | Ohentai 弹窗广告拦截 | [安装](https://raw.githubusercontent.com/qiqi777iii/Scripts/main/userscripts/ohentai-popup-blocker.user.js) |
 
 ## Scripting App 脚本包
