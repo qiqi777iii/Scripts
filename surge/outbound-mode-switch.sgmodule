@@ -1,6 +1,16 @@
-#!name=出站模式切换
-#!desc=网络变化时通过 DIRECT 探测出口 IP 归属地：非中国大陆 IP 切换为直连模式，中国大陆 IP 切换为规则模式。仅在网络变化时检测。
+#!name=出站模式切换 v2.0
+#!desc=网络变化时通过 DIRECT 探测出口 IP 归属地：非中国大陆 IP 切换为直连模式，中国大陆 IP 切换为规则模式。v2.0 修复探测请求未走 DIRECT、缓存状态与真实模式不同步导致卡在直连模式的问题，并增加启动/配置重载自愈与每 30 分钟兜底校正。
 #!category=工具
 
 [Script]
-出站模式切换 = type=event,event-name=network-changed,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=60
+# 网络变化时探测
+出站模式切换 = type=event,event-name=network-changed,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument=notify=0&failsafe=rule&cn=CN
+
+# 引擎启动后自愈（避免重启回到配置默认模式后不再纠正）
+出站模式切换-启动 = type=event,event-name=engine-started,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument=notify=0&failsafe=rule&cn=CN
+
+# 配置重载后自愈
+出站模式切换-重载 = type=event,event-name=profile-reloaded,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument=notify=0&failsafe=rule&cn=CN
+
+# 兜底校正：每 30 分钟核对一次，防止网络事件丢失后长期卡在错误模式
+出站模式切换-兜底 = type=cron,cronexp="*/30 * * * *",wake-system=false,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument=notify=0&failsafe=rule&cn=CN
