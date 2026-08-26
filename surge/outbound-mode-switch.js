@@ -46,6 +46,14 @@
  *   脚本无条件不接管，直到用户自己切回规则/直连。
  *   通知带 auto-dismiss，约 10 秒后自动消失且不响提示音。
  *
+ * v2.6 改进：
+ *   [重要] 全局代理保护 fail-closed。旧版保护完全依赖 $httpAPI 读取
+ *   真实模式，若 HTTP API 未开启，getCurrentMode() 返回 null，
+ *   保护条件不成立，全局代理照旧被覆盖，且没有任何提示。
+ *   现在记住“上次看到过全局代理”，读不到模式时保守不接管。
+ *   Logbook 输出带版本号，便于确认 Surge 实际加载的脚本版本
+ *   （Surge 会缓存 script-path 指向的 JS，模块更新≠脚本更新）。
+ *
  * 可选 argument（由模块参数表自动传入，也可手写）：
  *   notify=0        全部静默
  *   notify=1        事件切换发通知，cron 定时兜底静默 ← 推荐
@@ -57,7 +65,7 @@
  */
 
 const NAME = '出站模式切换';        // 通知标题，不带版本号
-const VERSION = '2.5';              // 仅用于日志
+const VERSION = '2.6';              // 仅用于日志，便于确认实际加载版本
 const STORE_KEY = 'outbound_mode_switch_state';
 
 const ARG = (() => {
@@ -194,9 +202,11 @@ function log(m) {
   console.log('[' + NAME + ' v' + VERSION + '] ' + m);
 }
 
+// 写入 Surge 最近事件。带版本号，便于确认 Surge 实际加载的脚本版本
+// （脚本文件有缓存，模块更新了不代表 JS 也更新了）。
 function book(m) {
   try {
-    $surge.logbook(m);
+    $surge.logbook('[v' + VERSION + '] ' + m);
   } catch (e) {}
 }
 
@@ -245,7 +255,6 @@ async function getCurrentMode() {
   if (r.mode === 'proxy') return 'global-proxy';
   return r.mode;
 }
-
 async function applyMode(mode) {
   let ok = false;
   try {
@@ -405,8 +414,27 @@ async function detect() {
   // 直到用户自己切回规则模式或直连模式。
   if (current === 'global-proxy') {
     log('当前为全局代理（手动设置），不接管');
+    // 记录下来：万一之后 HTTP API 读不到模式，也知道用户曾手动开过全局代理
+    writeState({ ...(prev || {}), sawGlobal: true, sawGlobalTs: now });
     $done();
     return;
+  }
+
+  // [重要] 读不到真实模式时 fail-closed：
+  // 全局代理保护完全依赖 getCurrentMode()，若 HTTP API 未开启或调用失败，
+  // current 会是 null，保护条件不成立，脚本就会像旧版一样覆盖全局代理。
+  // 因此只要上次看到过全局代理且用户没主动切走，就宁可不动。
+  if (current === null) {
+    if (prev && prev.sawGlobal) {
+      log('无法读取当前出站模式（HTTP API 不可用），且上次为全局代理，保守不接管');
+      book('无法读取出站模式，为保护全局代理已跳过本次切换');
+      $done();
+      return;
+    }
+    log('警告：无法读取当前出站模式，HTTP API 可能未开启，全局代理保护将失效');
+  } else if (prev && prev.sawGlobal) {
+    // 已确认离开全局代理，清除标记
+    writeState({ ...prev, sawGlobal: false, sawGlobalTs: 0 });
   }
 
   // 去抖：网络未变 + 刚成功探测过 + 真实模式与预期一致，才跳过。
@@ -438,7 +466,7 @@ async function detect() {
       log('探测失败，fail-safe 回落规则模式：' + (ok ? '成功' : '失败'));
       book('探测失败，已回落规则模式');
       notify(NAME, '探测失败', '无法确认出口归属地，已回落为规则模式');
-      writeState({ ok: false, key, mode: 'rule', ts: 0, failsafe: true });
+      writeState({ ok: false, key, mode: 'rule', ts: 0, failsafe: true, sawGlobal: false });
     } else {
       log('探测失败，保持当前模式：' + (current || '未知'));
       writeState({ ...(prev || {}), ok: false, ts: 0 });
@@ -481,6 +509,7 @@ async function detect() {
     ip: info.ip,
     mode,
     ts: Date.now(),
+    sawGlobal: false, // 已由脚本接管，不再是全局代理
   });
 
   $done();
