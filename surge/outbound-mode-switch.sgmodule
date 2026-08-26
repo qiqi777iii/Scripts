@@ -1,19 +1,19 @@
-#!name=出站模式切换 v2.2
-#!desc=网络变化时通过 DIRECT 探测出口 IP 归属地：非中国大陆 IP 切换为直连模式，中国大陆 IP 切换为规则模式。修复了探测请求未走 DIRECT、缓存与真实模式不同步导致卡在直连模式的问题，并带启动/重载/定时三重自愈。所有参数可在下方直接编辑。
+#!name=出站模式切换 v2.3
+#!desc=网络变化时通过 DIRECT 探测出口 IP 归属地：非中国大陆 IP 切换为直连模式，中国大陆 IP 切换为规则模式。默认尊重手动开启的全局代理（不会被网络变化覆盖）。带启动/重载/定时三重自愈。所有参数可在下方直接编辑。
 #!category=工具
-#!arguments=notify:1,failsafe:rule,cn:CN,interval:30,debounce:15,selfheal:true
-#!arguments-desc=【notify】通知级别：0=全部静默，1=切换时通知但定时自愈静默（推荐），2=全部通知\n【failsafe】探测失败时的兜底：rule=回落规则模式（推荐，境内境外都不断网），keep=保持当前模式不动\n【cn】视为「走规则模式」的国家/地区代码，逗号分隔。默认 CN；若你的机场落地在香港且希望香港也走规则，填 CN,HK\n【interval】定时兜底校正的间隔分钟数，防止网络事件丢失后长期卡在错误模式。必须填 1-59 的整数，建议 30（太小会触发 Surge 耗电警告）\n【debounce】同一网络内的去抖窗口秒数，期间重复的网络变化事件会被忽略。默认 15\n【selfheal】是否启用自愈（启动/配置重载/定时校正）：true=开启（推荐），false=关闭，关闭后只在网络变化时工作
+#!arguments=notify:1,global:respect,failsafe:rule,cn:CN,interval:30,debounce:15,selfheal:true
+#!arguments-desc=【notify】通知级别：0=全部静默，1=切换时通知但定时自愈静默（推荐），2=全部通知\n【global】手动开启全局代理时的行为：respect=完全不接管，直到你自己切回规则/直连（推荐）；hold60=保持 60 分钟后恢复自动接管，数字可改如 hold30、hold120；takeover=无视全局代理照常自动切换\n【failsafe】探测失败时的兜底：rule=回落规则模式（推荐，境内境外都不断网），keep=保持当前模式不动\n【cn】视为「走规则模式」的国家/地区代码，逗号分隔。默认 CN；若你的机场落地在香港且希望香港也走规则，填 CN,HK\n【interval】定时兜底校正的间隔分钟数，防止网络事件丢失后长期卡在错误模式。必须填 1-59 的整数，建议 30（太小会触发 Surge 耗电警告）\n【debounce】同一网络内的去抖窗口秒数，期间重复的网络变化事件会被忽略。默认 15\n【selfheal】是否启用自愈（启动/配置重载/定时校正）：true=开启（推荐），false=关闭，关闭后只在网络变化时工作
 #!requirement=CORE_VERSION>=17
 
 [Script]
 # 网络变化时探测 —— 主入口
-出站模式切换 = type=event,event-name=network-changed,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument="notify={{{notify}}}&failsafe={{{failsafe}}}&cn={{{cn}}}&debounce={{{debounce}}}"
+出站模式切换 = type=event,event-name=network-changed,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument="notify={{{notify}}}&global={{{global}}}&failsafe={{{failsafe}}}&cn={{{cn}}}&debounce={{{debounce}}}"
 
 # 引擎启动后自愈 —— 避免重启回到配置默认模式后不再纠正
-出站模式切换-启动 = type=event,event-name=engine-started,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument="notify={{{notify}}}&failsafe={{{failsafe}}}&cn={{{cn}}}&debounce={{{debounce}}}&selfheal={{{selfheal}}}"
+出站模式切换-启动 = type=event,event-name=engine-started,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument="notify={{{notify}}}&global={{{global}}}&failsafe={{{failsafe}}}&cn={{{cn}}}&debounce={{{debounce}}}&selfheal={{{selfheal}}}"
 
 # 配置重载后自愈
-出站模式切换-重载 = type=event,event-name=profile-reloaded,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument="notify={{{notify}}}&failsafe={{{failsafe}}}&cn={{{cn}}}&debounce={{{debounce}}}&selfheal={{{selfheal}}}"
+出站模式切换-重载 = type=event,event-name=profile-reloaded,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument="notify={{{notify}}}&global={{{global}}}&failsafe={{{failsafe}}}&cn={{{cn}}}&debounce={{{debounce}}}&selfheal={{{selfheal}}}"
 
 # 定时兜底校正 —— 静默运行，仅在 notify=2 时才发通知
-出站模式切换-兜底 = type=cron,cronexp="*/{{{interval}}} * * * *",wake-system=false,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument="notify={{{notify}}}&failsafe={{{failsafe}}}&cn={{{cn}}}&interval={{{interval}}}"
+出站模式切换-兜底 = type=cron,cronexp="*/{{{interval}}} * * * *",wake-system=false,script-path=https://raw.githubusercontent.com/qiqi777iii/Scripts/main/surge/outbound-mode-switch.js,timeout=30,argument="notify={{{notify}}}&global={{{global}}}&failsafe={{{failsafe}}}&cn={{{cn}}}&selfheal={{{selfheal}}}"
