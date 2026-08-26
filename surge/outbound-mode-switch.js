@@ -1,5 +1,5 @@
 /*
- * 出站模式切换 v2.0
+ * 出站模式切换 v2.1
  *
  * 通过 DIRECT 策略探测本机出口 IP 归属地：
  *   中国大陆 IP  -> 规则模式 (rule)
@@ -23,13 +23,25 @@
  *   7. 增加 engine-started / profile-reloaded / cron 自愈入口，
  *      网络事件丢失或探测失败后能自动纠正。
  *
- * 可选 argument（模块里 argument=key=value&key=value）：
- *   notify=1        探测到切换时发通知（默认 0 静默）
+ * v2.1 改进：
+ *   通知分级 —— notify=1 时事件触发的切换会发通知，但每 30 分钟的
+ *   cron 兜底自愈强制静默（只写 Logbook），避免后台校正反复打扰。
+ *
+ * v2.2 改进：
+ *   全部参数通过模块参数表暴露，可在 Surge 界面直接编辑，无需改脚本。
+ *   参数带合法性校验，填错会回落安全默认值而不是让脚本误判。
+ *
+ * 可选 argument（由模块参数表自动传入，也可手写）：
+ *   notify=0        全部静默
+ *   notify=1        事件切换发通知，cron 定时兜底静默 ← 推荐
+ *   notify=2        全部发通知（含 cron 兜底）
  *   failsafe=rule   探测失败时的兜底模式：rule / keep（默认 rule）
  *   cn=CN,HK        视为“走规则模式”的国家码列表（默认 CN）
+ *   debounce=15     同一网络的去抖窗口秒数（默认 15，上限 300）
+ *   selfheal=true   是否启用启动/重载/定时自愈（默认 true）
  */
 
-const NAME = '出站模式切换 v2.0';
+const NAME = '出站模式切换 v2.2';
 const STORE_KEY = 'outbound_mode_switch_state';
 
 const ARG = (() => {
@@ -45,18 +57,26 @@ const ARG = (() => {
   return o;
 })();
 
-const NOTIFY = ARG.notify === '1' || ARG.notify === 'true';
-const FAILSAFE = (ARG.failsafe || 'rule').toLowerCase(); // rule | keep
-const CN_CODES = (ARG.cn || 'CN')
-  .toUpperCase()
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const FAILSAFE = (ARG.failsafe || 'rule').toLowerCase() === 'keep' ? 'keep' : 'rule';
+const CN_CODES = (() => {
+  const list = (ARG.cn || 'CN')
+    .toUpperCase()
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => /^[A-Z]{2}$/.test(s));
+  return list.length ? list : ['CN']; // 参数填错时回落默认，避免所有 IP 都被判为境外
+})();
+const SELFHEAL = String(ARG.selfheal || 'true').toLowerCase() !== 'false';
 
 const REQ_TIMEOUT = 4;            // 单次请求超时（秒）
 const TOTAL_BUDGET = 20;          // 整个探测阶段的时间预算（秒），必须小于脚本 timeout
 const RETRY_DELAYS = [0, 2, 5];   // 轮次间隔（秒），切网瞬间接口未就绪时退避
-const SAME_NET_DEBOUNCE = 15;     // 同一网络内的去抖窗口（秒）
+
+// 去抖窗口：模块参数可调，限制在 0-300 秒
+const SAME_NET_DEBOUNCE = (() => {
+  const n = parseInt(ARG.debounce, 10);
+  return isNaN(n) || n < 0 ? 15 : Math.min(n, 300);
+})();
 
 const IS_CRON = (() => {
   try {
@@ -65,6 +85,30 @@ const IS_CRON = (() => {
     return false;
   }
 })();
+
+// 是否为自愈类触发（启动 / 配置重载 / 定时兜底）
+const IS_SELFHEAL_RUN = (() => {
+  if (IS_CRON) return true;
+  try {
+    return typeof $event !== 'undefined' && $event &&
+      ($event.name === 'engine-started' || $event.name === 'profile-reloaded');
+  } catch (e) {
+    return false;
+  }
+})();
+
+// 通知开关：
+//   notify=0  全部静默
+//   notify=1  事件切换发通知，cron 定时兜底静默（推荐，不被后台校正打扰）
+//   notify=2  全部发通知（含 cron 兜底）
+const NOTIFY_LEVEL = (() => {
+  const v = String(ARG.notify || '0').toLowerCase();
+  if (v === 'true' || v === 'yes') return 1;
+  if (v === 'false' || v === 'no') return 0;
+  const n = parseInt(v, 10);
+  return isNaN(n) ? 0 : Math.max(0, Math.min(n, 2));
+})();
+const NOTIFY = IS_CRON ? NOTIFY_LEVEL >= 2 : NOTIFY_LEVEL >= 1;
 
 const SOURCES = [
   {
@@ -115,8 +159,12 @@ function book(m) {
 function notify(title, sub, body) {
   if (!NOTIFY) return;
   try {
-    $notification.post(title, sub, body);
-  } catch (e) {}
+    $notification.post(title, sub, body, { 'auto-dismiss': true, sound: false });
+  } catch (e) {
+    try {
+      $notification.post(title, sub, body);
+    } catch (e2) {}
+  }
 }
 
 function sleep(sec) {
@@ -295,6 +343,14 @@ async function detect() {
 /* ---------- 主流程 ---------- */
 
 (async () => {
+  // selfheal=false 时，自愈类触发（启动/重载/定时兜底）直接退出，
+  // 只保留网络变化这一个入口。
+  if (IS_SELFHEAL_RUN && !SELFHEAL) {
+    log('自愈已在模块参数中关闭，跳过本次触发');
+    $done();
+    return;
+  }
+
   const prev = readState();
   const key = netKey();
   const now = Date.now();
@@ -304,8 +360,9 @@ async function detect() {
   // 只要真实模式和上次结论不符（被手动改过 / 切换失败 / 重启回默认），一律重新判定。
   // 当前处于 direct 时永不去抖：直连是风险态（判错会大面积断网），宁可多探一次。
   if (
-    !IS_CRON &&
+    !IS_SELFHEAL_RUN &&
     current !== 'direct' &&
+    SAME_NET_DEBOUNCE > 0 &&
     prev &&
     prev.ok &&
     key &&
