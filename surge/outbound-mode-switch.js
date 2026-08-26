@@ -41,6 +41,11 @@
  *   通知中的归属地显示中文国家名（如“日本”而非 JP）。
  *   通知标题去掉版本号。
  *
+ * v2.5 改进：
+ *   彻底移除 global 参数。全局代理是用户的明确手动意图，
+ *   脚本无条件不接管，直到用户自己切回规则/直连。
+ *   通知带 auto-dismiss，约 10 秒后自动消失且不响提示音。
+ *
  * 可选 argument（由模块参数表自动传入，也可手写）：
  *   notify=0        全部静默
  *   notify=1        事件切换发通知，cron 定时兜底静默 ← 推荐
@@ -49,11 +54,10 @@
  *   cn=CN,HK        视为“走规则模式”的国家码列表（默认 CN）
  *   debounce=15     同一网络的去抖窗口秒数（默认 15，上限 300）
  *   selfheal=true   是否启用启动/重载/定时自愈（默认 true）
- *   global=respect  全局代理策略：respect 不接管（默认）/ takeover 无视全局代理
  */
 
 const NAME = '出站模式切换';        // 通知标题，不带版本号
-const VERSION = '2.4';              // 仅用于日志
+const VERSION = '2.5';              // 仅用于日志
 const STORE_KEY = 'outbound_mode_switch_state';
 
 const ARG = (() => {
@@ -79,11 +83,6 @@ const CN_CODES = (() => {
   return list.length ? list : ['CN']; // 参数填错时回落默认，避免所有 IP 都被判为境外
 })();
 const SELFHEAL = String(ARG.selfheal || 'true').toLowerCase() !== 'false';
-
-// 全局代理模式的处理策略（关键：尊重用户手动意图）
-//   respect  检测到当前是全局代理时完全不接管，保持不动（默认）
-//   takeover 无视全局代理，照常自动切换
-const GLOBAL_TAKEOVER = String(ARG.global || 'respect').toLowerCase().trim() === 'takeover';
 
 const REQ_TIMEOUT = 4;            // 单次请求超时（秒）
 const TOTAL_BUDGET = 20;          // 整个探测阶段的时间预算（秒），必须小于脚本 timeout
@@ -402,8 +401,9 @@ async function detect() {
   const current = await getCurrentMode(); // Surge 的真实模式
 
   // ── 全局代理保护 ──────────────────────────────────────────
-  // 用户手动开启全局代理是明确意图，脚本不应擅自覆盖。
-  if (current === 'global-proxy' && !GLOBAL_TAKEOVER) {
+  // 手动开启全局代理是明确意图，脚本一律不接管，
+  // 直到用户自己切回规则模式或直连模式。
+  if (current === 'global-proxy') {
     log('当前为全局代理（手动设置），不接管');
     $done();
     return;
