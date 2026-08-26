@@ -31,6 +31,11 @@
  *   全部参数通过模块参数表暴露，可在 Surge 界面直接编辑，无需改脚本。
  *   参数带合法性校验，填错会回落安全默认值而不是让脚本误判。
  *
+ * v2.3 改进：
+ *   [重要] 全局代理保护。旧版只认 rule/direct 两态，用户手动开启的
+ *   全局代理会在下一次网络变化时被脚本静默覆盖掉。现在默认尊重手动
+ *   意图：检测到当前是全局代理就不接管，直到用户自己切回 rule/direct。
+ *
  * 可选 argument（由模块参数表自动传入，也可手写）：
  *   notify=0        全部静默
  *   notify=1        事件切换发通知，cron 定时兜底静默 ← 推荐
@@ -39,9 +44,11 @@
  *   cn=CN,HK        视为“走规则模式”的国家码列表（默认 CN）
  *   debounce=15     同一网络的去抖窗口秒数（默认 15，上限 300）
  *   selfheal=true   是否启用启动/重载/定时自愈（默认 true）
+ *   global=respect  全局代理策略：respect 永不接管（默认）/
+ *                   hold60 保持 60 分钟后恢复接管 / takeover 无视全局代理
  */
 
-const NAME = '出站模式切换 v2.2';
+const NAME = '出站模式切换 v2.3';
 const STORE_KEY = 'outbound_mode_switch_state';
 
 const ARG = (() => {
@@ -67,6 +74,21 @@ const CN_CODES = (() => {
   return list.length ? list : ['CN']; // 参数填错时回落默认，避免所有 IP 都被判为境外
 })();
 const SELFHEAL = String(ARG.selfheal || 'true').toLowerCase() !== 'false';
+
+// 全局代理模式的处理策略（关键：尊重用户手动意图）
+//   respect  检测到当前是全局代理时完全不接管，保持不动（默认）
+//   hold=N   保持 N 分钟后恢复自动接管；N 分钟内的网络变化不会覆盖
+//   takeover 无视全局代理，照常自动切换（旧版行为）
+const GLOBAL_POLICY = (() => {
+  const v = String(ARG.global || 'respect').toLowerCase().trim();
+  if (v === 'takeover') return { kind: 'takeover', minutes: 0 };
+  const m = /^hold[:=]?(\d+)$/.exec(v);
+  if (m) {
+    const n = Math.max(1, Math.min(parseInt(m[1], 10), 1440)); // 1 分钟 - 24 小时
+    return { kind: 'hold', minutes: n };
+  }
+  return { kind: 'respect', minutes: 0 };
+})();
 
 const REQ_TIMEOUT = 4;            // 单次请求超时（秒）
 const TOTAL_BUDGET = 20;          // 整个探测阶段的时间预算（秒），必须小于脚本 timeout
@@ -356,6 +378,37 @@ async function detect() {
   const now = Date.now();
   const current = await getCurrentMode(); // Surge 的真实模式
 
+  // ── 全局代理保护 ──────────────────────────────────────────
+  // 用户手动开启全局代理是明确意图，脚本不应擅自覆盖。
+  // 只有当上一次是脚本自己写入的模式时，才说明这不是手动操作。
+  if (current === 'global-proxy') {
+    if (GLOBAL_POLICY.kind === 'respect') {
+      log('当前为全局代理（手动设置），不接管');
+      writeState({ ...(prev || {}), globalSince: prev && prev.globalSince ? prev.globalSince : now });
+      $done();
+      return;
+    }
+    if (GLOBAL_POLICY.kind === 'hold') {
+      // 记录进入全局代理的时间，保持窗口内不接管
+      const since = prev && prev.globalSince ? prev.globalSince : now;
+      const elapsed = now - since;
+      const holdMs = GLOBAL_POLICY.minutes * 60 * 1000;
+      if (elapsed < holdMs) {
+        const restMin = Math.ceil((holdMs - elapsed) / 60000);
+        log('当前为全局代理，保持期剩余约 ' + restMin + ' 分钟，不接管');
+        writeState({ ...(prev || {}), globalSince: since });
+        $done();
+        return;
+      }
+      log('全局代理保持期已满（' + GLOBAL_POLICY.minutes + ' 分钟），恢复自动接管');
+      book('全局代理保持期已满，恢复自动切换');
+    }
+    // takeover：直接往下走，照常接管
+  } else if (prev && prev.globalSince) {
+    // 已离开全局代理，清除计时
+    writeState({ ...prev, globalSince: 0 });
+  }
+
   // 去抖：网络未变 + 刚成功探测过 + 真实模式与预期一致，才跳过。
   // 只要真实模式和上次结论不符（被手动改过 / 切换失败 / 重启回默认），一律重新判定。
   // 当前处于 direct 时永不去抖：直连是风险态（判错会大面积断网），宁可多探一次。
@@ -428,6 +481,7 @@ async function detect() {
     ip: info.ip,
     mode,
     ts: Date.now(),
+    globalSince: 0, // 已由脚本接管，清除全局代理计时
   });
 
   $done();
